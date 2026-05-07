@@ -24,7 +24,18 @@ SENSOR_COLUMNS = [
 ]
 
 ACTION_COLUMNS = ["cmd_steer", "cmd_accel", "cmd_brake", "cmd_gear", "cmd_clutch", "cmd_meta"]
-INFO_COLUMNS = ["target_speed", "corner_pressure", "slip", "mode", "opponent_guard"]
+INFO_COLUMNS = [
+    "target_speed",
+    "corner_pressure",
+    "edge_pressure",
+    "radar_front",
+    "radar_bias",
+    "wall_bias",
+    "straight_enough",
+    "slip",
+    "mode",
+    "opponent_guard",
+]
 
 
 class TelemetryLogger:

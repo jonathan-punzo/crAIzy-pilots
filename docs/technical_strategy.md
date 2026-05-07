@@ -9,7 +9,7 @@ Il driver usa una policy ibrida:
 - steering con `angle`, `trackPos` e bilanciamento dei sensori laterali;
 - traction control su `wheelSpinVel`;
 - recovery per fuori pista, auto bloccata e testacoda;
-- opponent guard disponibile nei test multi-driver, disattivato nella config best lap;
+- opponent guard disponibile nei test multi-driver, disattivato nel profilo best lap;
 - guida manuale Windows-friendly per test e raccolta dataset;
 - behavioral cloning come esperimento AI/ML documentato.
 
@@ -37,7 +37,7 @@ Il driver usa una policy ibrida:
 
 ## Configurazione
 
-- `best_lap`: unica configurazione automatica da gara su Corkscrew.
+- `src/driver/config.py`: unico punto Python per i parametri automatici da gara su Corkscrew.
 - `manual_control.py`: controller manuale per guida, debug e raccolta dataset.
 
 ## Uso di IBM Granite

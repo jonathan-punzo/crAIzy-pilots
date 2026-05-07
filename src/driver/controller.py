@@ -28,6 +28,12 @@ class TorcsAIDriver:
         steer = self.steering.update(sensors)
         target_speed, corner_pressure = self.speed_planner.target_speed(sensors, steer)
         speed = sensor(sensors, "speedX")
+        track_pos = sensor(sensors, "trackPos")
+        edge_pressure = clamp((abs(track_pos) - 0.62) / 0.38, 0.0, 1.0)
+
+        if edge_pressure > 0.0:
+            edge_target = 96.0 - edge_pressure * 34.0
+            target_speed = min(target_speed, edge_target)
 
         if speed < target_speed:
             speed_gap = clamp((target_speed - speed) / max(target_speed, 1.0), 0.0, 1.0)
@@ -41,6 +47,10 @@ class TorcsAIDriver:
         if corner_pressure > self.config.brake_threshold and speed > target_speed * 1.02:
             brake_target = max(brake_target, (corner_pressure - self.config.brake_threshold) * self.config.brake_strength)
             accel_target = min(accel_target, 0.25)
+
+        if edge_pressure > 0.0 and speed > target_speed * 0.95:
+            brake_target = max(brake_target, 0.12 + edge_pressure * 0.28)
+            accel_target = min(accel_target, 0.18)
 
         accel = lerp(self.previous_accel, accel_target, self.config.pedal_smoothing)
         brake = lerp(self.previous_brake, brake_target, self.config.pedal_smoothing)
@@ -66,6 +76,11 @@ class TorcsAIDriver:
         self.last_info = {
             "target_speed": round(target_speed, 3),
             "corner_pressure": round(corner_pressure, 3),
+            "edge_pressure": round(edge_pressure, 3),
+            "radar_front": self.steering.last_info.get("radar_front", ""),
+            "radar_bias": self.steering.last_info.get("radar_bias", ""),
+            "wall_bias": self.steering.last_info.get("wall_bias", ""),
+            "straight_enough": self.steering.last_info.get("straight_enough", ""),
             "slip": round(slip, 3),
             "mode": mode,
             "opponent_guard": guarded,

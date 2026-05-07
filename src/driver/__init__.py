@@ -1,5 +1,5 @@
-from .config import DriverConfig, load_config
+from .config import DriverConfig
 from .controller import TorcsAIDriver
 
-__all__ = ["DriverConfig", "TorcsAIDriver", "load_config"]
+__all__ = ["DriverConfig", "TorcsAIDriver"]
 

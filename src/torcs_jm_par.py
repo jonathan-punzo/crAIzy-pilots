@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-from driver import TorcsAIDriver, load_config
+from driver import DriverConfig, TorcsAIDriver
 from driver.telemetry import TelemetryLogger
 from torcs_client import Client
 
@@ -14,7 +13,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=3001, help="TORCS server port")
     parser.add_argument("--id", default="SCR", help="TORCS client id")
     parser.add_argument("--steps", type=int, default=100000, help="Maximum simulation steps")
-    parser.add_argument("--config", default="configs/best_lap.json", help="Driver JSON config")
     parser.add_argument("--log-dir", default="results/runs", help="Telemetry output directory")
     parser.add_argument("--no-log", action="store_true", help="Disable telemetry CSV logging")
     parser.add_argument("--debug", action="store_true", help="Print raw server state")
@@ -24,7 +22,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    config = load_config(args.config)
+    config = DriverConfig()
     driver = TorcsAIDriver(config)
     client = Client(
         host=args.host,

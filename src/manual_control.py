@@ -89,7 +89,7 @@ class ManualController:
         speed_steer_limit = clamp(1.12 - speed / 330.0, 0.35, 1.0)
         steer_target *= speed_steer_limit
         if self.state.stabilization and abs(steer_target) < 0.05:
-            steer_target += clamp(angle * 0.9 - track_pos * 0.18, -0.28, 0.28)
+            steer_target += clamp(-angle * 0.9 + track_pos * 0.18, -0.28, 0.28)
 
         accel_target = 1.0 if key_down("up") or key_down("w") else 0.0
         brake_target = 1.0 if key_down("down") or key_down("s") or key_down("space") else 0.0

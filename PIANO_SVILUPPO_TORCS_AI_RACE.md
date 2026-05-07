@@ -68,8 +68,6 @@ torcs-ai-race/
     utils/
       lap_logger.py
       plots.py
-  configs/
-    best_lap.json
   data/
     README.md
   results/
@@ -93,7 +91,7 @@ torcs-ai-race/
 - `gears.py`: cambio marcia automatico usando `speedX`, `rpm` e soglie configurabili.
 - `recovery.py`: recupero da fuori pista, testacoda, stallo o valori sensore non affidabili.
 - `telemetry.py`: logging di sensori, azioni, tempi, danno, uscite pista e parametri.
-- `config.py`: parametri centrali per `TARGET_SPEED`, `STEER_GAIN`, `CENTERING_GAIN`, `BRAKE_THRESHOLD`, `GEAR_SPEEDS`, traction control e modalita' test.
+- `config.py`: unico punto Python per `TARGET_SPEED`, `STEER_GAIN`, `CENTERING_GAIN`, `BRAKE_THRESHOLD`, `GEAR_SPEEDS`, traction control e modalita' test.
 - `manual_control.py`: guida manuale per prove, debug e raccolta dataset.
 
 ## 5. Sensori e azioni da usare
@@ -216,8 +214,8 @@ Attivita':
   - `BRAKE_THRESHOLD`
   - `GEAR_SPEEDS`
   - soglie traction control.
-- Mantenere una sola configurazione da gara:
-  - `best_lap.json`: massima prestazione sul giro secco.
+- Mantenere una sola configurazione da gara direttamente in Python:
+  - `src/driver/config.py`: massima prestazione sul giro secco.
 - Mantenere un solo flusso manuale:
   - `manual_control.py`: guida manuale per test e raccolta dati.
 - Generare grafici:
@@ -234,7 +232,7 @@ Attivita':
 Definition of Done:
 
 - Miglior tempo misurato e ripetibile.
-- `best_lap.json` completa giri puliti e produce il miglior tempo ripetibile.
+- `src/driver/config.py` completa giri puliti e produce il miglior tempo ripetibile.
 - `docs/granite_usage_log.md` contiene prompt, output sintetico e decisioni prese.
 
 ### Fase 4 - Behavioral cloning obbligatorio (6-13 giugno)
@@ -268,7 +266,7 @@ Obiettivo: congelare il driver e preparare materiali ufficiali.
 
 Attivita':
 
-- Freeze di `best_lap.json`.
+- Freeze dei parametri in `src/driver/config.py`.
 - Pulizia repository:
   - README completo
   - istruzioni setup
@@ -377,7 +375,7 @@ Per la gara, priorita':
 ## 9. Rischi e mitigazioni
 
 - Rischio: auto veloce ma instabile.
-  Mitigazione: `best_lap.json` va ottimizzato su best lap, ma validato su piu' tentativi per evitare un giro casuale non ripetibile.
+  Mitigazione: i parametri in `src/driver/config.py` vanno ottimizzati su best lap, ma validati su piu' tentativi per evitare un giro casuale non ripetibile.
 
 - Rischio: behavioral cloning lento o fragile.
   Mitigazione: usarlo come modulo confrontato e documentato; mantenere safety layer rule-based.

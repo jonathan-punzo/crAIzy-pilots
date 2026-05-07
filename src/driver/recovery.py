@@ -43,7 +43,7 @@ class RecoveryController:
             }, "reverse_recovery"
 
         if offtrack or blind:
-            steer = clamp(angle * 0.8 - track_pos * self.config.recovery_steer_gain, -1.0, 1.0)
+            steer = clamp(-angle * 0.8 + track_pos * self.config.recovery_steer_gain, -1.0, 1.0)
             action["steer"] = steer
             action["accel"] = min(float(action.get("accel", 0.0)), 0.35)
             action["brake"] = max(float(action.get("brake", 0.0)), 0.12 if speed > self.config.offtrack_speed else 0.0)

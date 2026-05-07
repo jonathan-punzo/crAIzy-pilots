@@ -33,9 +33,9 @@ src/
   manual_control.py      # controller manuale
   torcs_client.py        # client UDP compatibile SnakeOil/SCR
   driver/                # logica modulare del pilota
+    config.py            # parametri gara hardcoded in Python
   training/              # behavioral cloning e valutazione
   utils/                 # report, plot e riepiloghi
-configs/                 # configurazione best lap per Corkscrew
 docs/                    # strategia, Granite log, checklist, video/blog
 data/                    # dataset manuali o telemetry esportata
 results/                 # log CSV e report locali
@@ -53,7 +53,7 @@ tests/                   # test unitari del controller
 6. Da PowerShell:
 
 ```powershell
-py .\src\torcs_jm_par.py --config .\configs\best_lap.json --port 3001
+py .\src\torcs_jm_par.py --port 3001
 ```
 
 Oppure:
@@ -91,7 +91,7 @@ I log automatici vengono scritti in `results/runs/`; i log manuali in `results/m
 
 ## Workflow
 
-1. Usa `configs/best_lap.json` come unico preset da gara.
+1. Usa `src/driver/config.py` come unico punto di tuning del pilota da gara.
 2. Usa `src/manual_control.py` per provare il tracciato e raccogliere dati.
 3. Registra ogni prova in `docs/test_report.md`.
 4. Documenta l'uso di IBM Granite in `docs/granite_usage_log.md`.
@@ -108,4 +108,3 @@ Oppure:
 ```powershell
 .\scripts\run_tests.ps1
 ```
-
