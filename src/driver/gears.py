@@ -29,13 +29,15 @@ class Gearbox:
 
         if self.gear > speed_based + 1:
             self.gear = speed_based + 1
+        elif self.gear < speed_based - 1:
+            self.gear = speed_based - 1
 
         up_threshold = self.config.gear_speeds[min(self.gear, 5)]
         down_threshold = max(0.0, self.config.gear_speeds[max(self.gear - 1, 1)] - self.config.gear_hysteresis)
 
         if self.gear < 6 and (speed >= up_threshold or rpm >= self.config.upshift_rpm):
             self.gear += 1
-        elif self.gear > 1 and speed < down_threshold:
+        elif self.gear > 1 and (speed < down_threshold or rpm <= self.config.downshift_rpm):
             self.gear -= 1
 
         return min(max(self.gear, 1), 6)

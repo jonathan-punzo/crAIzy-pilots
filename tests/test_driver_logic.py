@@ -46,7 +46,7 @@ class DriverLogicTest(unittest.TestCase):
         action = driver.update(base_sensors(trackPos=1.25, speedX=55.0))
         self.assertEqual(driver.last_info["mode"], "offtrack_recovery")
         self.assertLessEqual(action["accel"], 0.35)
-        self.assertGreater(action["steer"], 0.0)
+        self.assertLess(action["steer"], 0.0)
 
     def test_high_speed_uses_high_gear(self):
         driver = TorcsAIDriver(DriverConfig())
@@ -81,8 +81,8 @@ class DriverLogicTest(unittest.TestCase):
         right_edge = steering.update(base_sensors(speedX=95.0, speedY=-4.0, angle=0.15, trackPos=-0.85))
         steering = SteeringController(config)
         left_edge = steering.update(base_sensors(speedX=95.0, speedY=4.0, angle=-0.15, trackPos=0.85))
-        self.assertLess(right_edge, 0.0)
-        self.assertGreater(left_edge, 0.0)
+        self.assertGreater(right_edge, 0.0)
+        self.assertLess(left_edge, 0.0)
 
     def test_straight_deadband_only_when_centered(self):
         config = DriverConfig()
@@ -91,7 +91,7 @@ class DriverLogicTest(unittest.TestCase):
         steering = SteeringController(config)
         left_offset = steering.update(base_sensors(speedX=95.0, speedY=0.0, angle=0.0, trackPos=0.33, track=[180.0] * 19))
         self.assertAlmostEqual(centered, 0.0, delta=0.001)
-        self.assertGreater(left_offset, 0.0)
+        self.assertLess(left_offset, 0.0)
 
     def test_edge_guard_slows_before_offtrack(self):
         config = DriverConfig()

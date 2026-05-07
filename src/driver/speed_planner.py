@@ -11,24 +11,27 @@ class SpeedPlanner:
 
     def target_speed(self, sensors: dict[str, object], steer: float) -> tuple[float, float]:
         values = track(sensors)
+        speed = sensor(sensors, "speedX")
+        min_side = min(min(values[:9]), min(values[10:]))
         front = values[9]
-        angle = sensor(sensors, "angle")
-        
-        max_dist = max(values)
-        
-        # Base target speed on the longest ray visible
-        target = max_dist * self.config.speed_distance_factor
-        
-        # Penalize speed if we are steering heavily or not facing forward
-        steer_penalty = 1.0 + abs(steer) * self.config.steer_speed_penalty
-        angle_penalty = 1.0 + abs(angle) * self.config.angle_speed_penalty
-        
-        target = target / (steer_penalty * angle_penalty)
-        
-        # Anticipate sharp turns: if longest ray is far but front is short
-        if front < 50 and max_dist > 80:
-            target = min(target, self.config.cornering_speed)
-            
-        target = clamp(target, self.config.min_speed, self.config.max_speed)
-        
-        return target, 0.0
+        max_front = max(values[7:12])
+
+        in_corner = min_side < self.config.corner_distance or front < speed * 0.65
+        safe_speed = self.config.gentle_corner_speed
+        if max_front < self.config.slow_down_distance:
+            safe_speed = self.config.sharp_corner_speed
+
+        target = self.config.target_speed
+        if speed >= self.config.target_speed - 5.0 and front > self.config.straight_distance:
+            target = self.config.straight_speed
+        if in_corner:
+            target = min(target, safe_speed)
+
+        if abs(sensor(sensors, "trackPos")) > 1.0:
+            target = min(target, self.config.offtrack_speed)
+
+        corner_pressure = 1.0 if in_corner else 0.0
+        if max_front < speed * 0.60:
+            corner_pressure = max(corner_pressure, clamp((speed * 0.60 - max_front) / 80.0, 0.0, 1.0))
+
+        return target, corner_pressure
