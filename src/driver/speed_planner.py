@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .config import DriverConfig
-from .math_utils import clamp, mean
+from .math_utils import clamp
 from .sensors import sensor, track
 
 
@@ -12,39 +12,23 @@ class SpeedPlanner:
     def target_speed(self, sensors: dict[str, object], steer: float) -> tuple[float, float]:
         values = track(sensors)
         front = values[9]
-        near_front = mean(values[7:12])
-        left = mean(values[:8])
-        right = mean(values[11:])
-
-        front_pressure = clamp((120.0 - min(front, near_front)) / 120.0, 0.0, 1.0)
-        side_pressure = clamp(abs(left - right) / max(left + right, 1.0), 0.0, 1.0)
-        steer_pressure = clamp(
-            (abs(steer) - self.config.brake_threshold) / max(1.0 - self.config.brake_threshold, 0.05),
-            0.0,
-            1.0,
-        )
-        lateral_pressure = clamp(abs(sensor(sensors, "speedY")) / 35.0, 0.0, 1.0)
-        offtrack_pressure = 1.0 if abs(sensor(sensors, "trackPos")) > 0.88 else 0.0
-
-        corner_pressure = clamp(
-            front_pressure * 0.52
-            + side_pressure * 0.18
-            + steer_pressure * 0.18
-            + lateral_pressure * 0.08
-            + offtrack_pressure * 0.04,
-            0.0,
-            1.0,
-        )
-
-        openness = clamp((near_front - 65.0) / 135.0, 0.0, 1.0)
-        cruise_target = self.config.target_speed + (self.config.max_speed - self.config.target_speed) * openness
-        span = cruise_target - self.config.min_corner_speed
-        target = cruise_target - span * corner_pressure * 0.72
-        target -= abs(sensor(sensors, "speedY")) * self.config.lateral_speed_gain
-        target -= abs(sensor(sensors, "trackPos")) * 12.0
-        target = clamp(target, self.config.min_corner_speed, self.config.max_speed)
-
-        if abs(sensor(sensors, "trackPos")) > 1.0:
-            target = min(target, self.config.offtrack_speed)
-
-        return target, corner_pressure
+        angle = sensor(sensors, "angle")
+        
+        max_dist = max(values)
+        
+        # Base target speed on the longest ray visible
+        target = max_dist * self.config.speed_distance_factor
+        
+        # Penalize speed if we are steering heavily or not facing forward
+        steer_penalty = 1.0 + abs(steer) * self.config.steer_speed_penalty
+        angle_penalty = 1.0 + abs(angle) * self.config.angle_speed_penalty
+        
+        target = target / (steer_penalty * angle_penalty)
+        
+        # Anticipate sharp turns: if longest ray is far but front is short
+        if front < 50 and max_dist > 80:
+            target = min(target, self.config.cornering_speed)
+            
+        target = clamp(target, self.config.min_speed, self.config.max_speed)
+        
+        return target, 0.0
