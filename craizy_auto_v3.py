@@ -1,79 +1,134 @@
+import argparse
+import bisect
 import csv
+import json
 import math
 import os
 import statistics
 import time
 
-import torcs_jm_par_modulare as legacy_auto
+import snakeoil3_jm2 as snakeoil3
 
-
-# ============================================================
-# crAIzy pilots - automatic driver V3
-# ============================================================
 
 PORT = 3001
 MAX_STEPS = 100000
-DRIVER_VERSION = "craizy_auto_v3_expert"
+DRIVER_VERSION = "craizy_auto_v3_multilap_profile"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "torcs_ps4_dataset.csv")
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
 AUTO_RESULTS_PATH = os.path.join(BASE_DIR, "auto_v3_runs.csv")
 TRACE_PATH = os.path.join(BASE_DIR, "auto_v3_trace.csv")
 TRACE_EVERY = 5
 
-PROFILE_BIN_METERS = 5.0
+PROFILE_STEP_METERS = 5.0
+DANGER_SECTOR_METERS = 20.0
 MIN_COMPLETE_LAP_ROWS = 800
 MIN_COMPLETE_LAP_DISTANCE = 3500.0
-EXPERT_SPEED_SCALE = 1.00
-EXPERT_STEER_FEEDFORWARD = 0.48
-EXPERT_ANGLE_GAIN = 1.70
-EXPERT_POSITION_GAIN = 0.58
-EXPERT_LATERAL_DAMPING = 0.004
-EXPERT_MAX_LINE_ERROR = 1.05
-EXPERT_MAX_ANGLE_ERROR = 0.58
-BRAKING_DECEL_MPS2 = 7.2
+MIN_CLEAN_LAPS = 3
+MAX_TRACK_LENGTH_DEVIATION = 10.0
 
-WHEEL_RADII = (0.3306, 0.3306, 0.3276, 0.3276)
+STEER_POSITION_GAIN = 0.16
+STEER_ANGLE_GAIN = 0.22
+STEER_LATERAL_GAIN = 0.002
+MAX_STEER_CORRECTION = 0.12
+MIN_CORRECTION_SPEED_SCALE = 0.25
+MIN_RELIABILITY_CORRECTION_FACTOR = 0.65
 
-STEER_SMOOTHING = 0.34
-STEER_TARGET_FILTER = 0.28
-PEDAL_SMOOTHING = 0.20
-MAX_STEER_LOW_SPEED = 0.92
-MAX_STEER_HIGH_SPEED = 0.24
-SPEED_FOR_MIN_STEER = 240.0
+TRACKPOS_MAD_FULL_CONFIDENCE = 0.15
+ANGLE_MAD_FULL_CONFIDENCE = 0.10
+SPEED_MAD_FULL_CONFIDENCE = 20.0
+SPEEDY_MAD_FULL_CONFIDENCE = 8.0
 
-THROTTLE_STEER_START = 0.55
-THROTTLE_STEER_FULL = 0.90
-THROTTLE_STEER_MIN_ACCEL = 0.72
+BRAKE_START_THRESHOLD = 0.10
+BRAKE_END_THRESHOLD = 0.05
+BRAKE_CONFIRM_SAMPLES = 5
+BRAKE_MERGE_GAP_METERS = 10.0
 
-ABS_MIN_SPEED_KMH = 10.0
-ABS_SLIP_START_MPS = 2.0
-ABS_SLIP_FULL_MPS = 6.0
-ABS_MAX_RELEASE = 0.75
+RECOVERY_ENTER_LINE_ERROR = 0.75
+RECOVERY_EXIT_LINE_ERROR = 0.45
+RECOVERY_ENTER_ANGLE_ERROR = 0.50
+RECOVERY_EXIT_ANGLE_ERROR = 0.30
+RECOVERY_ENTER_LATERAL_ERROR = 18.0
+RECOVERY_EXIT_LATERAL_ERROR = 10.0
+RECOVERY_ENTER_TRACK_POS = 0.95
+RECOVERY_EXIT_TRACK_POS = 0.82
+RECOVERY_BLEND_IN = 0.08
+RECOVERY_BLEND_OUT = 0.04
+RECOVERY_TARGET_SPEED = 70.0
 
-TCS_SLIP_START_MPS = 3.0
-TCS_SLIP_FULL_MPS = 10.0
-TCS_MAX_CUT = 0.40
-
-STRAIGHT_TARGET_SPEED = 235.0
-MIN_CORNER_SPEED = 90.0
-CURVE_FILTER = 0.18
-CURVE_SIGNAL_FILTER = 0.14
-
-SHIFT_COOLDOWN = 0.35
-UPSHIFT_RPM = 7600.0
-DOWNSHIFT_RPM = 3300.0
-PANIC_DOWNSHIFT_RPM = 2300.0
-UPSHIFT_SPEED = {1: 45.0, 2: 78.0, 3: 112.0, 4: 148.0, 5: 184.0}
-DOWNSHIFT_SPEED = {2: 30.0, 3: 58.0, 4: 90.0, 5: 122.0, 6: 155.0}
-MIN_SPEED_FOR_UPSHIFT = {1: 22.0, 2: 48.0, 3: 78.0, 4: 110.0, 5: 145.0}
+PROFILE_EXPORT_PATH = os.path.join(
+    RESULTS_DIR,
+    "corkscrew_profile_5m.csv",
+)
+DANGER_EXPORT_PATH = os.path.join(
+    RESULTS_DIR,
+    "corkscrew_danger_20m.csv",
+)
+BRAKING_EXPORT_PATH = os.path.join(
+    RESULTS_DIR,
+    "corkscrew_braking_zones.csv",
+)
+LAPS_EXPORT_PATH = os.path.join(
+    RESULTS_DIR,
+    "corkscrew_lap_comparison.csv",
+)
 
 DATASET_COLUMNS = [
-    "steer", "accel", "brake", "gear",
+    "run_id", "step", "curLapTime",
+    "steer_intent", "accel_intent", "brake_intent",
+    "steer_action", "accel_action", "brake_action", "gear_action",
     "speedX", "speedY", "speedZ",
     "wheelSpinVel", "z", "track", "trackPos", "angle",
     "rpm", "damage", "distFromStart",
 ]
+
+NUMERIC_DATASET_FIELDS = (
+    "step",
+    "curLapTime",
+    "steer_intent",
+    "accel_intent",
+    "brake_intent",
+    "steer_action",
+    "accel_action",
+    "brake_action",
+    "gear_action",
+    "speedX",
+    "speedY",
+    "speedZ",
+    "z",
+    "trackPos",
+    "angle",
+    "rpm",
+    "damage",
+    "distFromStart",
+)
+
+PROFILE_INTERPOLATED_FIELDS = (
+    "steer_action",
+    "accel_action",
+    "brake_action",
+    "best_speedX",
+    "best_speedY",
+    "best_angle",
+    "best_trackPos",
+    "median_speedX",
+    "median_speedY",
+    "median_angle",
+    "median_trackPos",
+    "speedX_mad",
+    "speedY_mad",
+    "angle_mad",
+    "trackPos_mad",
+    "track_consensus",
+    "angle_consensus",
+    "reliability",
+    "target_speedX",
+    "target_speedY",
+    "target_angle",
+    "target_trackPos",
+    "danger_score",
+)
 
 
 def clamp(value, minimum, maximum):
@@ -86,718 +141,1177 @@ def safe_float(value, default=0.0):
         if math.isnan(value) or math.isinf(value):
             return default
         return value
-    except Exception:
+    except (TypeError, ValueError):
         return default
+
+
+def parse_float(value):
+    value = float(value)
+    if math.isnan(value) or math.isinf(value):
+        raise ValueError("Valore numerico non finito.")
+    return value
 
 
 def safe_list(value, length, default_value=0.0):
     if not isinstance(value, (list, tuple)):
         return [default_value] * length
-
     values = [safe_float(item, default_value) for item in value[:length]]
     if len(values) < length:
         values += [default_value] * (length - len(values))
     return values
 
 
-def linear_limit(value, start, full, minimum):
-    value = abs(value)
-    if value <= start:
-        return 1.0
-    if value >= full:
-        return minimum
-    ratio = (value - start) / max(full - start, 0.0001)
-    return 1.0 + (minimum - 1.0) * ratio
+def blend(first, second, amount):
+    return first + (second - first) * clamp(amount, 0.0, 1.0)
 
 
-class AutomaticGearbox:
-    def __init__(self):
-        self.gear = 1
-        self.last_shift_time = 0.0
-
-    def reset(self):
-        self.gear = 1
-        self.last_shift_time = 0.0
-
-    def update(self, sensors):
-        now = time.monotonic()
-        speed = abs(safe_float(sensors.get("speedX")))
-        rpm = safe_float(sensors.get("rpm"))
-        current = int(clamp(self.gear, 1, 6))
-
-        if now - self.last_shift_time < SHIFT_COOLDOWN:
-            return current
-
-        new_gear = current
-        if current > 1:
-            too_slow = speed < DOWNSHIFT_SPEED.get(current, 0.0)
-            rpm_too_low = 0.0 < rpm < PANIC_DOWNSHIFT_RPM
-            rpm_low_and_slow = (
-                0.0 < rpm < DOWNSHIFT_RPM
-                and speed < DOWNSHIFT_SPEED.get(current, 0.0) + 12.0
-            )
-            if too_slow or rpm_too_low or rpm_low_and_slow:
-                new_gear = current - 1
-
-        if new_gear == current and current < 6:
-            enough_speed = speed >= MIN_SPEED_FOR_UPSHIFT.get(current, 999.0)
-            if (rpm >= UPSHIFT_RPM and enough_speed) or speed >= UPSHIFT_SPEED.get(current, 999.0):
-                new_gear = current + 1
-
-        new_gear = int(clamp(new_gear, 1, 6))
-        if new_gear != current:
-            self.last_shift_time = now
-        self.gear = new_gear
-        return new_gear
+def median_absolute_deviation(values):
+    if not values:
+        return 0.0
+    center = statistics.median(values)
+    return statistics.median(abs(value - center) for value in values)
 
 
-class SharedADAS:
-    """Applies the same physical assists to human and automatic intentions."""
-
-    def __init__(self):
-        self.gearbox = AutomaticGearbox()
-        self.reset()
-
-    def reset(self):
-        self.steer = 0.0
-        self.steer_target = 0.0
-        self.accel = 0.0
-        self.brake = 0.0
-        self.gearbox.reset()
-
-    def apply(self, sensors, intent):
-        speed = abs(safe_float(sensors.get("speedX")))
-        target_steer = clamp(safe_float(intent.get("steer")), -1.0, 1.0)
-        target_accel = clamp(safe_float(intent.get("accel")), 0.0, 1.0)
-        target_brake = clamp(safe_float(intent.get("brake")), 0.0, 1.0)
-
-        speed_ratio = clamp(speed / SPEED_FOR_MIN_STEER, 0.0, 1.0)
-        steer_limit = (
-            MAX_STEER_LOW_SPEED
-            + (MAX_STEER_HIGH_SPEED - MAX_STEER_LOW_SPEED) * speed_ratio
-        )
-        target_steer = clamp(target_steer, -steer_limit, steer_limit)
-
-        self.steer_target += STEER_TARGET_FILTER * (
-            target_steer - self.steer_target
-        )
-        target_steer = self.steer_target
-        target_deadzone = 0.012 if speed > 100.0 else 0.006
-        if abs(target_steer) < target_deadzone:
-            target_steer = 0.0
-
-        throttle_limit = linear_limit(
-            target_steer,
-            THROTTLE_STEER_START,
-            THROTTLE_STEER_FULL,
-            THROTTLE_STEER_MIN_ACCEL,
-        )
-        target_accel *= throttle_limit
-
-        if speed > 170.0:
-            steer_rate = 0.018
-        elif speed > 100.0:
-            steer_rate = 0.026
-        else:
-            steer_rate = 0.040
-
-        steer_step = (target_steer - self.steer) * STEER_SMOOTHING
-        self.steer += clamp(steer_step, -steer_rate, steer_rate)
-        self.accel += PEDAL_SMOOTHING * (target_accel - self.accel)
-        brake_smoothing = 0.38 if target_brake < self.brake else PEDAL_SMOOTHING
-        self.brake += brake_smoothing * (target_brake - self.brake)
-        output_accel = self.accel
-        output_brake = self.brake
-
-        wheel_spin = safe_list(sensors.get("wheelSpinVel"), 4)
-        wheel_speed = [
-            abs(wheel_spin[index]) * WHEEL_RADII[index]
-            for index in range(4)
-        ]
-        vehicle_speed = speed / 3.6
-        mean_wheel_speed = sum(wheel_speed) / len(wheel_speed)
-        driven_wheel_speed = (wheel_speed[2] + wheel_speed[3]) / 2.0
-
-        abs_slip = max(0.0, vehicle_speed - mean_wheel_speed)
-        abs_release = 0.0
-        if speed >= ABS_MIN_SPEED_KMH and abs_slip > ABS_SLIP_START_MPS:
-            abs_release = clamp(
-                (abs_slip - ABS_SLIP_START_MPS)
-                / max(ABS_SLIP_FULL_MPS - ABS_SLIP_START_MPS, 0.001),
-                0.0,
-                1.0,
-            ) * ABS_MAX_RELEASE
-            output_brake *= 1.0 - abs_release
-
-        traction_slip = max(0.0, driven_wheel_speed - vehicle_speed)
-        traction_cut = 0.0
-        if traction_slip > TCS_SLIP_START_MPS:
-            traction_cut = clamp(
-                (traction_slip - TCS_SLIP_START_MPS)
-                / max(TCS_SLIP_FULL_MPS - TCS_SLIP_START_MPS, 0.001),
-                0.0,
-                1.0,
-            ) * TCS_MAX_CUT
-            output_accel *= 1.0 - traction_cut
-
-        if target_brake > 0.05 or output_brake > 0.05:
-            output_accel = 0.0
-
-        action = {
-            "steer": clamp(self.steer, -1.0, 1.0),
-            "accel": clamp(output_accel, 0.0, 1.0),
-            "brake": clamp(output_brake, 0.0, 1.0),
-            "gear": self.gearbox.update(sensors),
-            "clutch": 0.0,
-            "meta": 0,
-        }
-        diagnostics = {
-            "steer_limit": steer_limit,
-            "abs_slip": abs_slip,
-            "abs_release": abs_release,
-            "traction_slip": traction_slip,
-            "traction_cut": traction_cut,
-        }
-        return action, diagnostics
+def percentile(values, fraction):
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = clamp(fraction, 0.0, 1.0) * (len(ordered) - 1)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    return blend(
+        ordered[lower_index],
+        ordered[upper_index],
+        position - lower_index,
+    )
 
 
-class ExpertProfile:
+def danger_level(score):
+    if score < 0.25:
+        return "low"
+    if score < 0.50:
+        return "medium"
+    if score < 0.75:
+        return "high"
+    return "critical"
+
+
+def circular_distance_gap(start, end, track_length):
+    return (start - end) % track_length
+
+
+def distance_in_interval(distance, start, end, wraps):
+    if wraps:
+        return distance >= start or distance <= end
+    return start <= distance <= end
+
+
+class CorkscrewProfile:
     def __init__(self, path=DATASET_PATH):
         self.path = path
-        self.bins = {}
+        self.error = ""
         self.rows = 0
         self.laps = 0
         self.track_length = 0.0
+        self.selected_run_id = ""
+        self.selected_lap_time = 0.0
+        self.clean_laps = []
+        self.lap_comparison = []
+        self.profile = []
+        self.profile_distances = []
+        self.danger_map = []
+        self.braking_zones = []
         self.load()
 
     @property
     def available(self):
-        return bool(self.bins)
+        return bool(self.profile)
 
     @staticmethod
-    def _split_laps(rows):
-        if not rows:
-            return []
-
-        laps = []
-        start = 0
-        previous_distance = safe_float(rows[0].get("distFromStart"))
-        for index in range(1, len(rows)):
-            distance = safe_float(rows[index].get("distFromStart"))
-            distance_jump = distance - previous_distance
-            if abs(distance_jump) > 250.0 or distance_jump < -2.0:
-                laps.append(rows[start:index])
-                start = index
-            previous_distance = distance
-        laps.append(rows[start:])
-        return laps
+    def _group_runs(rows):
+        groups = {}
+        order = []
+        for row in rows:
+            run_id = str(row.get("run_id", "")).strip()
+            if not run_id:
+                continue
+            if run_id not in groups:
+                groups[run_id] = []
+                order.append(run_id)
+            groups[run_id].append(row)
+        return [(run_id, groups[run_id]) for run_id in order]
 
     @staticmethod
-    def _is_complete_lap(rows):
-        if len(rows) < MIN_COMPLETE_LAP_ROWS:
-            return False
-        distances = [safe_float(row.get("distFromStart")) for row in rows]
-        return min(distances) < 80.0 and max(distances) >= MIN_COMPLETE_LAP_DISTANCE
+    def _prepare_run(run_id, raw_rows):
+        prepared = []
+        reason = ""
+        try:
+            for raw in raw_rows:
+                row = {"run_id": run_id}
+                for field in NUMERIC_DATASET_FIELDS:
+                    if field not in raw or raw[field] == "":
+                        raise ValueError("Campo mancante: %s" % field)
+                    row[field] = parse_float(raw[field])
+
+                track = json.loads(raw.get("track", ""))
+                wheel_spin = json.loads(raw.get("wheelSpinVel", ""))
+                if not isinstance(track, list) or len(track) != 19:
+                    raise ValueError("Sensori track non validi.")
+                if not isinstance(wheel_spin, list) or len(wheel_spin) != 4:
+                    raise ValueError("Sensori ruota non validi.")
+                row["track"] = [parse_float(value) for value in track]
+                row["wheelSpinVel"] = [
+                    parse_float(value) for value in wheel_spin
+                ]
+
+                if not -1.0 <= row["steer_action"] <= 1.0:
+                    raise ValueError("steer_action fuori range.")
+                for field in (
+                    "accel_action",
+                    "brake_action",
+                    "accel_intent",
+                    "brake_intent",
+                ):
+                    if not 0.0 <= row[field] <= 1.0:
+                        raise ValueError("%s fuori range." % field)
+                if not -1.0 <= row["steer_intent"] <= 1.0:
+                    raise ValueError("steer_intent fuori range.")
+                gear = int(row["gear_action"])
+                if row["gear_action"] != gear or gear < 1 or gear > 6:
+                    raise ValueError("gear_action fuori range.")
+                row["gear_action"] = gear
+                prepared.append(row)
+        except (ValueError, TypeError, json.JSONDecodeError) as error:
+            reason = str(error)
+            return None, reason
+
+        prepared.sort(key=lambda row: row["step"])
+        if len(prepared) < MIN_COMPLETE_LAP_ROWS:
+            return None, "Meno di %d campioni." % MIN_COMPLETE_LAP_ROWS
+
+        distances = [row["distFromStart"] for row in prepared]
+        length = max(distances)
+        if min(distances) >= 80.0 or length < MIN_COMPLETE_LAP_DISTANCE:
+            return None, "Giro non completo."
+        if max(row["damage"] for row in prepared) > 0.0:
+            return None, "Danno maggiore di zero."
+        if max(abs(row["trackPos"]) for row in prepared) >= 1.0:
+            return None, "Uscita pista rilevata da trackPos."
+        if min(min(row["track"]) for row in prepared) < 0.0:
+            return None, "Uscita pista rilevata dai sensori track."
+
+        previous = None
+        for row in prepared:
+            row["_deceleration"] = 0.0
+            if previous is not None:
+                delta_time = row["curLapTime"] - previous["curLapTime"]
+                if 0.001 <= delta_time <= 1.0:
+                    speed_delta = (
+                        previous["speedX"] - row["speedX"]
+                    ) / 3.6
+                    row["_deceleration"] = max(
+                        0.0,
+                        speed_delta / delta_time,
+                    )
+            previous = row
+
+        lap_times = [
+            row["curLapTime"]
+            for row in prepared
+            if row["curLapTime"] > 0.0
+        ]
+        lap_time = max(lap_times) if lap_times else float("inf")
+        return {
+            "run_id": run_id,
+            "rows": prepared,
+            "length": length,
+            "lap_time": lap_time,
+            "max_damage": max(row["damage"] for row in prepared),
+            "max_abs_trackPos": max(
+                abs(row["trackPos"]) for row in prepared
+            ),
+            "max_speed": max(row["speedX"] for row in prepared),
+            "avg_speed": statistics.fmean(
+                row["speedX"] for row in prepared
+            ),
+        }, reason
 
     @staticmethod
-    def _weighted_average(values):
-        total = sum(value * weight for value, weight in values)
-        weight_total = sum(weight for _, weight in values)
-        return total / max(weight_total, 0.0001)
+    def _deduplicate_by_distance(rows):
+        ordered = sorted(rows, key=lambda row: row["distFromStart"])
+        result = []
+        for row in ordered:
+            if (
+                result
+                and abs(
+                    result[-1]["distFromStart"] - row["distFromStart"]
+                ) < 0.000001
+            ):
+                result[-1] = row
+            else:
+                result.append(row)
+        return result
+
+    @staticmethod
+    def _sample_lap(lap, distance, track_length):
+        rows = lap["distance_rows"]
+        distances = lap["distances"]
+        distance %= track_length
+        upper_index = bisect.bisect_left(distances, distance)
+        if (
+            upper_index < len(rows)
+            and abs(distances[upper_index] - distance) < 0.000001
+        ):
+            exact = rows[upper_index]
+            return {
+                "steer_action": exact["steer_action"],
+                "accel_action": exact["accel_action"],
+                "brake_action": exact["brake_action"],
+                "gear_action": exact["gear_action"],
+                "speedX": exact["speedX"],
+                "speedY": exact["speedY"],
+                "angle": exact["angle"],
+                "trackPos": exact["trackPos"],
+            }
+
+        if upper_index == 0:
+            lower = rows[-1]
+            upper = rows[0]
+            lower_distance = distances[-1] - track_length
+            upper_distance = distances[0]
+        elif upper_index >= len(rows):
+            lower = rows[-1]
+            upper = rows[0]
+            lower_distance = distances[-1]
+            upper_distance = distances[0] + track_length
+        else:
+            lower = rows[upper_index - 1]
+            upper = rows[upper_index]
+            lower_distance = distances[upper_index - 1]
+            upper_distance = distances[upper_index]
+
+        span = upper_distance - lower_distance
+        fraction = (
+            (distance - lower_distance) / span
+            if span > 0.000001
+            else 0.0
+        )
+        fields = (
+            "steer_action",
+            "accel_action",
+            "brake_action",
+            "speedX",
+            "speedY",
+            "angle",
+            "trackPos",
+        )
+        result = {
+            field: blend(lower[field], upper[field], fraction)
+            for field in fields
+        }
+        result["gear_action"] = (
+            lower["gear_action"]
+            if fraction < 0.5
+            else upper["gear_action"]
+        )
+        return result
+
+    def _build_profile(self):
+        count = int(math.ceil(self.track_length / PROFILE_STEP_METERS))
+        grid = [
+            index * PROFILE_STEP_METERS
+            for index in range(count)
+            if index * PROFILE_STEP_METERS < self.track_length
+        ]
+        best_lap = min(
+            self.clean_laps,
+            key=lambda lap: (lap["lap_time"], -len(lap["rows"])),
+        )
+        self.selected_run_id = best_lap["run_id"]
+        self.selected_lap_time = best_lap["lap_time"]
+
+        profile = []
+        for index, distance in enumerate(grid):
+            samples = [
+                self._sample_lap(lap, distance, self.track_length)
+                for lap in self.clean_laps
+            ]
+            best = self._sample_lap(
+                best_lap,
+                distance,
+                self.track_length,
+            )
+
+            values = {
+                field: [sample[field] for sample in samples]
+                for field in ("speedX", "speedY", "angle", "trackPos")
+            }
+            medians = {
+                field: statistics.median(field_values)
+                for field, field_values in values.items()
+            }
+            mads = {
+                field: median_absolute_deviation(field_values)
+                for field, field_values in values.items()
+            }
+
+            track_consensus = clamp(
+                1.0 - mads["trackPos"] / TRACKPOS_MAD_FULL_CONFIDENCE,
+                0.0,
+                1.0,
+            )
+            angle_consensus = clamp(
+                1.0 - mads["angle"] / ANGLE_MAD_FULL_CONFIDENCE,
+                0.0,
+                1.0,
+            )
+            speed_consensus = clamp(
+                1.0 - mads["speedX"] / SPEED_MAD_FULL_CONFIDENCE,
+                0.0,
+                1.0,
+            )
+            speedy_consensus = clamp(
+                1.0 - mads["speedY"] / SPEEDY_MAD_FULL_CONFIDENCE,
+                0.0,
+                1.0,
+            )
+            reliability = statistics.fmean((
+                track_consensus,
+                angle_consensus,
+                speed_consensus,
+                speedy_consensus,
+            ))
+
+            profile.append({
+                "bin_index": index,
+                "distance": distance,
+                "steer_action": best["steer_action"],
+                "accel_action": best["accel_action"],
+                "brake_action": best["brake_action"],
+                "gear_action": best["gear_action"],
+                "best_speedX": best["speedX"],
+                "best_speedY": best["speedY"],
+                "best_angle": best["angle"],
+                "best_trackPos": best["trackPos"],
+                "median_speedX": medians["speedX"],
+                "median_speedY": medians["speedY"],
+                "median_angle": medians["angle"],
+                "median_trackPos": medians["trackPos"],
+                "speedX_mad": mads["speedX"],
+                "speedY_mad": mads["speedY"],
+                "angle_mad": mads["angle"],
+                "trackPos_mad": mads["trackPos"],
+                "track_consensus": track_consensus,
+                "angle_consensus": angle_consensus,
+                "reliability": reliability,
+                "target_speedX": blend(
+                    best["speedX"],
+                    medians["speedX"],
+                    speed_consensus,
+                ),
+                "target_speedY": blend(
+                    best["speedY"],
+                    medians["speedY"],
+                    speedy_consensus,
+                ),
+                "target_angle": blend(
+                    best["angle"],
+                    medians["angle"],
+                    angle_consensus,
+                ),
+                "target_trackPos": blend(
+                    best["trackPos"],
+                    medians["trackPos"],
+                    track_consensus,
+                ),
+                "danger_sector": 0,
+                "danger_score": 0.0,
+                "danger_level": "low",
+            })
+
+        self.profile = profile
+        self.profile_distances = [
+            sample["distance"] for sample in profile
+        ]
+        self.rows = len(profile)
+
+    @staticmethod
+    def _detected_braking_zones(lap, track_length):
+        rows = lap["rows"]
+        zones = []
+        active_start = None
+        above_count = 0
+        below_count = 0
+
+        def profile_distance(row):
+            return row.get("_profile_distance", row["distFromStart"])
+
+        for index, row in enumerate(rows):
+            brake = row["brake_action"]
+            if active_start is None:
+                above_count = (
+                    above_count + 1
+                    if brake > BRAKE_START_THRESHOLD
+                    else 0
+                )
+                if above_count >= BRAKE_CONFIRM_SAMPLES:
+                    active_start = index - BRAKE_CONFIRM_SAMPLES + 1
+                    below_count = 0
+            else:
+                below_count = (
+                    below_count + 1
+                    if brake < BRAKE_END_THRESHOLD
+                    else 0
+                )
+                if below_count >= BRAKE_CONFIRM_SAMPLES:
+                    end_index = index - BRAKE_CONFIRM_SAMPLES
+                    zone_rows = rows[active_start:end_index + 1]
+                    if zone_rows:
+                        zones.append({
+                            "run_id": lap["run_id"],
+                            "rows": zone_rows,
+                            "start": profile_distance(zone_rows[0]),
+                            "end": profile_distance(zone_rows[-1]),
+                            "wraps": (
+                                profile_distance(zone_rows[-1])
+                                < profile_distance(zone_rows[0])
+                            ),
+                        })
+                    active_start = None
+                    above_count = 0
+                    below_count = 0
+
+        if active_start is not None:
+            zone_rows = rows[active_start:]
+            zones.append({
+                "run_id": lap["run_id"],
+                "rows": zone_rows,
+                "start": profile_distance(zone_rows[0]),
+                "end": profile_distance(zone_rows[-1]),
+                "wraps": (
+                    profile_distance(zone_rows[-1])
+                    < profile_distance(zone_rows[0])
+                ),
+            })
+
+        merged = []
+        for zone in zones:
+            if not merged:
+                merged.append(zone)
+                continue
+            previous = merged[-1]
+            gap = circular_distance_gap(
+                zone["start"],
+                previous["end"],
+                track_length,
+            )
+            if gap < BRAKE_MERGE_GAP_METERS:
+                previous["rows"].extend(zone["rows"])
+                previous["end"] = zone["end"]
+                previous["wraps"] = (
+                    previous["wraps"]
+                    or zone["wraps"]
+                    or previous["end"] < previous["start"]
+                )
+            else:
+                merged.append(zone)
+
+        if len(merged) > 1:
+            gap = circular_distance_gap(
+                merged[0]["start"],
+                merged[-1]["end"],
+                track_length,
+            )
+            if gap < BRAKE_MERGE_GAP_METERS:
+                last = merged.pop()
+                first = merged.pop(0)
+                combined = {
+                    "run_id": lap["run_id"],
+                    "rows": last["rows"] + first["rows"],
+                    "start": last["start"],
+                    "end": first["end"],
+                    "wraps": True,
+                }
+                merged.insert(0, combined)
+        return merged
+
+    @staticmethod
+    def _circular_groups(active):
+        groups = []
+        current = []
+        for index, is_active in enumerate(active):
+            if is_active:
+                current.append(index)
+            elif current:
+                groups.append(current)
+                current = []
+        if current:
+            groups.append(current)
+        if (
+            len(groups) > 1
+            and groups[0][0] == 0
+            and groups[-1][-1] == len(active) - 1
+        ):
+            groups[0] = groups[-1] + groups[0]
+            groups.pop()
+        return groups
+
+    def _build_braking_map(self):
+        detected = []
+        for lap in self.clean_laps:
+            detected.extend(
+                self._detected_braking_zones(lap, self.track_length)
+            )
+
+        support = []
+        for sample in self.profile:
+            distance = sample["distance"]
+            laps_supporting = {
+                zone["run_id"]
+                for zone in detected
+                if distance_in_interval(
+                    distance,
+                    zone["start"],
+                    zone["end"],
+                    zone["wraps"],
+                )
+            }
+            support.append(len(laps_supporting))
+
+        zones = []
+        for zone_index, indexes in enumerate(
+            self._circular_groups([value > 0 for value in support])
+        ):
+            start = self.profile[indexes[0]]["distance"]
+            end = (
+                self.profile[indexes[-1]]["distance"]
+                + PROFILE_STEP_METERS
+            ) % self.track_length
+            wraps = indexes[0] > indexes[-1] or end < start
+            contributing = [
+                zone
+                for zone in detected
+                if any(
+                    distance_in_interval(
+                        self.profile[index]["distance"],
+                        zone["start"],
+                        zone["end"],
+                        zone["wraps"],
+                    )
+                    for index in indexes
+                )
+            ]
+            samples = [
+                row
+                for zone in contributing
+                for row in zone["rows"]
+            ]
+            if not samples:
+                continue
+            start_speeds = [
+                zone["rows"][0]["speedX"] for zone in contributing
+            ]
+            minimum_speeds = [
+                min(row["speedX"] for row in zone["rows"])
+                for zone in contributing
+            ]
+            reductions = [
+                max(0.0, start_speed - minimum_speed)
+                for start_speed, minimum_speed in zip(
+                    start_speeds,
+                    minimum_speeds,
+                )
+            ]
+            zones.append({
+                "zone_id": zone_index,
+                "start_distance": start,
+                "end_distance": end,
+                "wraps_finish": int(wraps),
+                "support_laps": max(support[index] for index in indexes),
+                "support_ratio": statistics.fmean(
+                    support[index] / self.laps for index in indexes
+                ),
+                "initial_speed": statistics.median(start_speeds),
+                "minimum_speed": statistics.median(minimum_speeds),
+                "maximum_brake": max(
+                    row["brake_action"] for row in samples
+                ),
+                "mean_brake": statistics.fmean(
+                    row["brake_action"] for row in samples
+                ),
+                "speed_reduction": statistics.median(reductions),
+            })
+        self.braking_zones = zones
+
+    def _build_danger_map(self):
+        sector_count = int(
+            math.ceil(self.track_length / DANGER_SECTOR_METERS)
+        )
+        sector_rows = [[] for _ in range(sector_count)]
+        for lap in self.clean_laps:
+            for row in lap["rows"]:
+                sector = min(
+                    int(
+                        (row["_profile_distance"] % self.track_length)
+                        // DANGER_SECTOR_METERS
+                    ),
+                    sector_count - 1,
+                )
+                sector_rows[sector].append(row)
+
+        danger_map = []
+        for index, rows in enumerate(sector_rows):
+            brake = clamp(
+                percentile(
+                    [row["brake_action"] for row in rows],
+                    0.95,
+                ),
+                0.0,
+                1.0,
+            )
+            steer = clamp(
+                percentile(
+                    [abs(row["steer_action"]) for row in rows],
+                    0.95,
+                ) / 0.8,
+                0.0,
+                1.0,
+            )
+            lateral = clamp(
+                percentile(
+                    [abs(row["speedY"]) for row in rows],
+                    0.95,
+                ) / 25.0,
+                0.0,
+                1.0,
+            )
+            angle = clamp(
+                percentile(
+                    [abs(row["angle"]) for row in rows],
+                    0.95,
+                ) / 0.50,
+                0.0,
+                1.0,
+            )
+            edge = clamp(
+                percentile(
+                    [
+                        clamp(
+                            (abs(row["trackPos"]) - 0.55) / 0.40,
+                            0.0,
+                            1.0,
+                        )
+                        for row in rows
+                    ],
+                    0.95,
+                ),
+                0.0,
+                1.0,
+            )
+            deceleration = clamp(
+                percentile(
+                    [row["_deceleration"] for row in rows],
+                    0.95,
+                ) / 8.0,
+                0.0,
+                1.0,
+            )
+            score = clamp(
+                0.25 * brake
+                + 0.20 * steer
+                + 0.15 * lateral
+                + 0.15 * angle
+                + 0.15 * edge
+                + 0.10 * deceleration,
+                0.0,
+                1.0,
+            )
+            danger_map.append({
+                "sector_index": index,
+                "start_distance": index * DANGER_SECTOR_METERS,
+                "end_distance": min(
+                    (index + 1) * DANGER_SECTOR_METERS,
+                    self.track_length,
+                ),
+                "sample_count": len(rows),
+                "brake_component": brake,
+                "steer_component": steer,
+                "speedY_component": lateral,
+                "angle_component": angle,
+                "edge_component": edge,
+                "deceleration_component": deceleration,
+                "danger_score": score,
+                "danger_level": danger_level(score),
+            })
+
+        self.danger_map = danger_map
+        for sample in self.profile:
+            sector = min(
+                int(sample["distance"] // DANGER_SECTOR_METERS),
+                len(danger_map) - 1,
+            )
+            danger = danger_map[sector]
+            sample["danger_sector"] = sector
+            sample["danger_score"] = danger["danger_score"]
+            sample["danger_level"] = danger["danger_level"]
 
     def load(self):
         if not os.path.exists(self.path) or os.path.getsize(self.path) == 0:
+            self.error = "Dataset post-ADAS assente: registra almeno tre giri."
             return
 
         try:
-            with open(self.path, newline="", encoding="utf-8-sig") as dataset_file:
-                reader = csv.DictReader(dataset_file)
+            with open(self.path, newline="", encoding="utf-8-sig") as source:
+                reader = csv.DictReader(source)
                 if reader.fieldnames != DATASET_COLUMNS:
-                    print("[DATASET] Schema non compatibile, profilo umano disattivato.")
+                    self.error = (
+                        "Schema legacy rifiutato: V3 richiede intent e action "
+                        "post-ADAS."
+                    )
                     return
-                all_rows = list(reader)
+                raw_rows = list(reader)
         except (OSError, csv.Error) as error:
-            print("[DATASET] Impossibile leggere il profilo umano: %s" % error)
+            self.error = "Impossibile leggere il dataset: %s" % error
             return
 
-        complete_laps = [
-            lap for lap in self._split_laps(all_rows)
-            if self._is_complete_lap(lap)
-        ]
-        if not complete_laps:
-            print("[DATASET] Nessun giro completo trovato nel CSV.")
+        candidates = []
+        comparison = []
+        for run_id, rows in self._group_runs(raw_rows):
+            lap, reason = self._prepare_run(run_id, rows)
+            if lap is None:
+                comparison.append({
+                    "run_id": run_id,
+                    "accepted": 0,
+                    "selected": 0,
+                    "reason": reason,
+                    "rows": len(rows),
+                    "lap_time": "",
+                    "track_length": "",
+                    "max_damage": "",
+                    "max_abs_trackPos": "",
+                    "avg_speed": "",
+                    "max_speed": "",
+                })
+                continue
+            candidates.append(lap)
+            comparison.append({
+                "run_id": run_id,
+                "accepted": 1,
+                "selected": 0,
+                "reason": "",
+                "rows": len(lap["rows"]),
+                "lap_time": lap["lap_time"],
+                "track_length": lap["length"],
+                "max_damage": lap["max_damage"],
+                "max_abs_trackPos": lap["max_abs_trackPos"],
+                "avg_speed": lap["avg_speed"],
+                "max_speed": lap["max_speed"],
+            })
+
+        if len(candidates) < MIN_CLEAN_LAPS:
+            self.lap_comparison = comparison
+            self.error = (
+                "Servono almeno %d giri post-ADAS puliti; trovati: %d."
+                % (MIN_CLEAN_LAPS, len(candidates))
+            )
             return
 
-        fields = ("steer", "accel", "brake", "speedX", "angle", "trackPos")
-        lap_profiles = []
-        for lap in complete_laps:
-            lap_samples = {}
-            for row in lap:
-                if abs(safe_float(row.get("trackPos"))) > 1.05:
-                    continue
-                distance = max(0.0, safe_float(row.get("distFromStart")))
-                bin_id = int(distance // PROFILE_BIN_METERS)
-                values = lap_samples.setdefault(
-                    bin_id,
-                    {key: [] for key in fields},
+        median_length = statistics.median(
+            lap["length"] for lap in candidates
+        )
+        clean_laps = []
+        rejected_ids = set()
+        for lap in candidates:
+            if abs(lap["length"] - median_length) > MAX_TRACK_LENGTH_DEVIATION:
+                rejected_ids.add(lap["run_id"])
+            else:
+                clean_laps.append(lap)
+
+        for row in comparison:
+            if row["run_id"] in rejected_ids:
+                row["accepted"] = 0
+                row["reason"] = "Lunghezza oltre 10 m dalla mediana."
+
+        if len(clean_laps) < MIN_CLEAN_LAPS:
+            self.lap_comparison = comparison
+            self.error = (
+                "Dopo il controllo lunghezza restano %d giri; ne servono %d."
+                % (len(clean_laps), MIN_CLEAN_LAPS)
+            )
+            return
+
+        self.clean_laps = clean_laps
+        self.laps = len(clean_laps)
+        self.track_length = statistics.median(
+            lap["length"] for lap in clean_laps
+        )
+        for lap in clean_laps:
+            distance_scale = self.track_length / lap["length"]
+            for row in lap["rows"]:
+                row["_profile_distance"] = clamp(
+                    row["distFromStart"] * distance_scale,
+                    0.0,
+                    self.track_length,
                 )
-                for key in fields:
-                    values[key].append(safe_float(row.get(key)))
-                self.rows += 1
-
-            lap_profile = {}
-            for bin_id, values in lap_samples.items():
-                if len(values["speedX"]) < 2:
-                    continue
-                lap_profile[bin_id] = {
-                    key: statistics.median(values[key])
-                    for key in fields
+            scaled_rows = [
+                {
+                    **row,
+                    "distFromStart": row["_profile_distance"],
                 }
-            lap_profiles.append(lap_profile)
+                for row in lap["rows"]
+            ]
+            lap["distance_rows"] = self._deduplicate_by_distance(
+                scaled_rows
+            )
+            lap["distances"] = [
+                row["distFromStart"] for row in lap["distance_rows"]
+            ]
+        self._build_profile()
+        self._build_braking_map()
+        self._build_danger_map()
 
-        raw_bins = {}
-        all_bin_ids = sorted({
-            bin_id
-            for lap_profile in lap_profiles
-            for bin_id in lap_profile
-        })
-        for bin_id in all_bin_ids:
-            raw_bins[bin_id] = {
-                key: statistics.median([
-                    lap_profile[bin_id][key]
-                    for lap_profile in lap_profiles
-                    if bin_id in lap_profile
-                ])
-                for key in fields
-            }
+        for row in comparison:
+            row["selected"] = int(
+                row["run_id"] == self.selected_run_id
+            )
+        self.lap_comparison = comparison
 
-        for bin_id in raw_bins:
-            line_neighbours = []
-            pedal_neighbours = []
-            weights = ((-2, 1.0), (-1, 2.0), (0, 3.0), (1, 2.0), (2, 1.0))
-            for offset, weight in weights:
-                neighbour = raw_bins.get(bin_id + offset)
-                if neighbour is not None:
-                    line_neighbours.append((neighbour, weight))
-                    if abs(offset) <= 1:
-                        pedal_neighbours.append((neighbour, weight))
-
-            self.bins[bin_id] = {
-                "steer": self._weighted_average([
-                    (clamp(item["steer"], -1.0, 1.0), weight)
-                    for item, weight in line_neighbours
-                ]),
-                "angle": self._weighted_average([
-                    (item["angle"], weight)
-                    for item, weight in line_neighbours
-                ]),
-                "trackPos": self._weighted_average([
-                    (item["trackPos"], weight)
-                    for item, weight in line_neighbours
-                ]),
-                "speedX": self._weighted_average([
-                    (item["speedX"], weight)
-                    for item, weight in pedal_neighbours
-                ]),
-                "accel": self._weighted_average([
-                    (item["accel"], weight)
-                    for item, weight in pedal_neighbours
-                ]),
-                "brake": self._weighted_average([
-                    (item["brake"], weight)
-                    for item, weight in pedal_neighbours
-                ]),
-            }
-        self.laps = len(complete_laps)
-        self.track_length = (max(self.bins) + 1) * PROFILE_BIN_METERS
+    def _interpolate_profile(self, lower, upper, fraction, distance):
+        result = {
+            field: blend(lower[field], upper[field], fraction)
+            for field in PROFILE_INTERPOLATED_FIELDS
+        }
+        result["gear_action"] = (
+            lower["gear_action"]
+            if fraction < 0.5
+            else upper["gear_action"]
+        )
+        nearest = lower if fraction < 0.5 else upper
+        result["bin_index"] = nearest["bin_index"]
+        result["distance"] = distance
+        result["danger_sector"] = nearest["danger_sector"]
+        result["danger_level"] = danger_level(result["danger_score"])
+        return result
 
     def reference_at(self, distance):
         if not self.available:
             return None
+        distance = safe_float(distance) % self.track_length
+        upper_index = bisect.bisect_left(self.profile_distances, distance)
 
-        distance = clamp(safe_float(distance), 0.0, self.track_length - 0.001)
-        bin_position = distance / PROFILE_BIN_METERS
-        lower_id = int(bin_position)
-        upper_id = min(lower_id + 1, max(self.bins))
-        lower = self.bins.get(lower_id)
-        upper = self.bins.get(upper_id)
+        if upper_index == 0:
+            lower = self.profile[-1]
+            upper = self.profile[0]
+            lower_distance = (
+                self.profile_distances[-1] - self.track_length
+            )
+            upper_distance = self.profile_distances[0]
+        elif upper_index >= len(self.profile):
+            lower = self.profile[-1]
+            upper = self.profile[0]
+            lower_distance = self.profile_distances[-1]
+            upper_distance = self.profile_distances[0] + self.track_length
+        else:
+            lower = self.profile[upper_index - 1]
+            upper = self.profile[upper_index]
+            lower_distance = self.profile_distances[upper_index - 1]
+            upper_distance = self.profile_distances[upper_index]
 
-        if lower is None:
-            return upper
-        if upper is None:
-            return lower
+        span = upper_distance - lower_distance
+        fraction = (
+            (distance - lower_distance) / span
+            if span > 0.000001
+            else 0.0
+        )
+        return self._interpolate_profile(
+            lower,
+            upper,
+            fraction,
+            distance,
+        )
 
-        fraction = bin_position - lower_id
-        return {
-            key: lower[key] + (upper[key] - lower[key]) * fraction
-            for key in lower
+    def export_reports(self, results_dir=RESULTS_DIR):
+        os.makedirs(results_dir, exist_ok=True)
+        paths = {
+            "profile": os.path.join(
+                results_dir,
+                os.path.basename(PROFILE_EXPORT_PATH),
+            ),
+            "danger": os.path.join(
+                results_dir,
+                os.path.basename(DANGER_EXPORT_PATH),
+            ),
+            "braking": os.path.join(
+                results_dir,
+                os.path.basename(BRAKING_EXPORT_PATH),
+            ),
+            "laps": os.path.join(
+                results_dir,
+                os.path.basename(LAPS_EXPORT_PATH),
+            ),
         }
 
-    def target_speed(self, distance, current_speed):
-        reference = self.reference_at(distance)
-        if reference is None:
-            return None
-
-        target = reference["speedX"] * EXPERT_SPEED_SCALE
-        lookahead = clamp(35.0 + current_speed * 0.28, 45.0, 105.0)
-        offset = PROFILE_BIN_METERS
-        while offset <= lookahead:
-            future_distance = distance + offset
-            if future_distance >= self.track_length:
-                break
-            future = self.reference_at(future_distance)
-            if future is not None:
-                future_speed = max(0.0, future["speedX"] * EXPERT_SPEED_SCALE)
-                allowed = math.sqrt(
-                    (future_speed / 3.6) ** 2
-                    + 2.0 * BRAKING_DECEL_MPS2 * offset
-                ) * 3.6
-                target = min(target, allowed)
-            offset += PROFILE_BIN_METERS
-        return target
-
-
-class FallbackPolicy:
-    def __init__(self):
-        self.curve_strength = 0.0
-        self.curve_signal = 0.0
+        profile_rows = []
+        for sample in self.profile:
+            profile_rows.append({
+                **sample,
+                "distance_norm": sample["distance"] / self.track_length,
+                "trackPos_norm": sample["target_trackPos"],
+                "angle_norm": sample["target_angle"] / math.pi,
+                "speedX_norm": sample["target_speedX"] / 300.0,
+                "speedY_norm": sample["target_speedY"] / 100.0,
+                "steer_norm": sample["steer_action"],
+                "accel_norm": sample["accel_action"],
+                "brake_norm": sample["brake_action"],
+            })
+        self._write_rows(paths["profile"], profile_rows)
+        self._write_rows(paths["danger"], self.danger_map)
+        self._write_rows(paths["braking"], self.braking_zones)
+        self._write_rows(paths["laps"], self.lap_comparison)
+        return paths
 
     @staticmethod
-    def _front_speed_limit(front):
-        if front >= 160.0:
-            return STRAIGHT_TARGET_SPEED
-        if front >= 120.0:
-            return 190.0 + (front - 120.0) * 1.125
-        if front >= 85.0:
-            return 150.0 + (front - 85.0) * (40.0 / 35.0)
-        if front >= 55.0:
-            return 115.0 + (front - 55.0) * (35.0 / 30.0)
-        if front >= 30.0:
-            return 80.0 + (front - 30.0) * 1.4
-        return 72.0
-
-    def intention(self, sensors):
-        track = [
-            max(0.0, value)
-            for value in safe_list(sensors.get("track"), 19, 200.0)
-        ]
-        front = track[9]
-        left_front = sum(track[6:9]) / 3.0
-        right_front = sum(track[10:13]) / 3.0
-        measured_curve_signal = right_front - left_front
-        self.curve_signal += CURVE_SIGNAL_FILTER * (
-            measured_curve_signal - self.curve_signal
-        )
-        curve_signal = self.curve_signal
-
-        front_pressure = clamp((150.0 - front) / 110.0, 0.0, 1.0)
-        signal_pressure = clamp((abs(curve_signal) - 8.0) / 82.0, 0.0, 1.0)
-        measured_curve = max(front_pressure, signal_pressure)
-        self.curve_strength += CURVE_FILTER * (measured_curve - self.curve_strength)
-        curve_strength = clamp(self.curve_strength, 0.0, 1.0)
-
-        speed = safe_float(sensors.get("speedX"))
-        speed_y = safe_float(sensors.get("speedY"))
-        angle = safe_float(sensors.get("angle"))
-        track_pos = safe_float(sensors.get("trackPos"))
-
-        angle_deadzone = 0.026 - curve_strength * 0.016
-        position_deadzone = 0.055 - curve_strength * 0.030
-        steering_angle = 0.0 if abs(angle) < angle_deadzone else angle
-        steering_position = 0.0 if abs(track_pos) < position_deadzone else track_pos
-
-        angle_gain = 1.55 + curve_strength * 1.00
-        centering_gain = 0.14 - curve_strength * 0.03
-        preview_gain = 0.08 + curve_strength * 0.15
-        preview = (curve_signal / 200.0) * preview_gain
-        lateral_damping = speed_y * (0.0055 - curve_strength * 0.0035)
-
-        steer = (
-            steering_angle * angle_gain
-            - steering_position * centering_gain
-            + preview
-            - lateral_damping
-        )
-
-        if abs(track_pos) > 0.82:
-            steer -= track_pos * 0.22
-        if abs(speed_y) > 8.0:
-            steer *= 0.88
-
-        policy_steer_limit = 0.22 + curve_strength * 0.58
-        steer = clamp(steer, -policy_steer_limit, policy_steer_limit)
-
-        curve_target = (
-            STRAIGHT_TARGET_SPEED
-            - (STRAIGHT_TARGET_SPEED - MIN_CORNER_SPEED) * (curve_strength ** 0.72)
-        )
-        target_speed = min(curve_target, self._front_speed_limit(front))
-
-        if abs(track_pos) > 0.90:
-            target_speed = min(target_speed, 70.0)
-        elif abs(track_pos) > 0.72:
-            target_speed = min(target_speed, 105.0)
-
-        if abs(speed_y) > 14.0:
-            target_speed = min(target_speed, 90.0)
-        elif abs(speed_y) > 9.0:
-            target_speed = min(target_speed, 125.0)
-
-        if abs(angle) > 0.42:
-            target_speed = min(target_speed, 78.0)
-        elif abs(angle) > 0.26:
-            target_speed = min(target_speed, 115.0)
-
-        speed_error = target_speed - speed
-        if speed_error > 25.0:
-            accel = 1.0
-        elif speed_error > 10.0:
-            accel = 0.85
-        elif speed_error > 0.0:
-            accel = 0.58
-        elif speed_error > -5.0:
-            accel = 0.22
-        else:
-            accel = 0.0
-
-        overspeed = speed - target_speed
-        if overspeed > 45.0:
-            brake = 0.50
-        elif overspeed > 25.0:
-            brake = 0.30
-        elif overspeed > 12.0:
-            brake = 0.15
-        else:
-            brake = 0.0
-
-        if front < max(32.0, speed * 0.32) and overspeed > 5.0:
-            brake = max(brake, 0.30)
-        if brake > 0.05:
-            accel = 0.0
-        elif curve_strength > 0.78 and speed_error < 18.0:
-            accel = min(accel, 0.42)
-
-        track_info = {
-            "front": front,
-            "curve_signal": curve_signal,
-            "curve_strength": curve_strength,
-            "target_speed": target_speed,
-        }
-        return {"steer": steer, "accel": accel, "brake": brake}, track_info
+    def _write_rows(path, rows):
+        if not rows:
+            with open(path, "w", encoding="utf-8"):
+                return
+        with open(path, "w", newline="", encoding="utf-8") as output:
+            writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
 
 
-class ExpertGuidedPolicy:
+class PostAdasReplayPolicy:
     def __init__(self, profile):
         self.profile = profile
-        self.fallback = FallbackPolicy()
-        self.previous_distance = None
-        self.launch_mode = None
+        self.recovery_active = False
+        self.recovery_blend = 0.0
 
-    def intention(self, sensors):
-        fallback_intent, track_info = self.fallback.intention(sensors)
-        distance = max(0.0, safe_float(sensors.get("distFromStart")))
+    @staticmethod
+    def _recovery_action(sensors, reference):
         speed = safe_float(sensors.get("speedX"))
-
-        if self.launch_mode is None:
-            self.launch_mode = distance > 3000.0 and speed < 30.0
-        if (
-            self.launch_mode
-            and self.previous_distance is not None
-            and self.previous_distance - distance > 1000.0
-        ):
-            self.launch_mode = False
-        self.previous_distance = distance
-
-        reference = self.profile.reference_at(distance)
-        if self.launch_mode or reference is None:
-            if self.launch_mode and speed > 135.0:
-                fallback_intent = fallback_intent.copy()
-                fallback_intent["accel"] = 0.0
-                fallback_intent["brake"] = max(fallback_intent["brake"], 0.12)
-                track_info["target_speed"] = min(
-                    track_info["target_speed"],
-                    135.0,
-                )
-            track_info.update({
-                "mode": "launch" if self.launch_mode else "fallback",
-                "expert_speed": 0.0,
-                "expert_track_pos": 0.0,
-                "expert_angle": 0.0,
-                "line_error": 0.0,
-                "angle_error": 0.0,
-                "safety_blend": 1.0,
-            })
-            return fallback_intent, track_info, fallback_intent, None, False
-
-        track_pos = safe_float(sensors.get("trackPos"))
         angle = safe_float(sensors.get("angle"))
-        speed_y = safe_float(sensors.get("speedY"))
-        line_error = track_pos - reference["trackPos"]
-        angle_error = angle - reference["angle"]
+        track_pos = safe_float(sensors.get("trackPos"))
+        steer = clamp(angle * 1.25 - track_pos * 0.70, -0.80, 0.80)
 
-        feedforward = clamp(reference["steer"], -0.65, 0.65)
-        expert_steer = (
-            feedforward * EXPERT_STEER_FEEDFORWARD
-            - angle_error * EXPERT_ANGLE_GAIN
-            + line_error * EXPERT_POSITION_GAIN
-            - speed_y * EXPERT_LATERAL_DAMPING
-        )
-
-        line_slowdown = clamp(
-            (abs(line_error) - 0.45)
-            / max(EXPERT_MAX_LINE_ERROR - 0.45, 0.001),
-            0.0,
-            1.0,
-        )
-        angle_danger = clamp(
-            (abs(angle_error) - 0.32)
-            / max(EXPERT_MAX_ANGLE_ERROR - 0.32, 0.001),
-            0.0,
-            1.0,
-        )
-        edge_danger = clamp((abs(track_pos) - 0.94) / 0.16, 0.0, 1.0)
-        safety_blend = max(angle_danger, edge_danger)
-        steer = expert_steer
-
-        target_speed = self.profile.target_speed(distance, speed)
-        target_speed *= 1.0 - 0.18 * line_slowdown
-        fallback_speed = track_info["target_speed"]
-        if safety_blend > 0.0:
-            safety_target = min(target_speed, fallback_speed)
-            target_speed += (safety_target - target_speed) * safety_blend
-
-        front = track_info["front"]
-        if abs(track_pos) > 1.0:
-            target_speed = min(target_speed, 65.0)
-        elif abs(track_pos) > 0.90:
-            target_speed = min(target_speed, 105.0)
-        if abs(speed_y) > 15.0:
-            target_speed = min(target_speed, 95.0)
-        if front < 18.0 and speed > 100.0:
-            target_speed = min(target_speed, 85.0)
-
-        speed_error = target_speed - speed
-        if speed_error > 18.0:
-            accel = 1.0
-        elif speed_error > 8.0:
-            accel = max(0.88, reference["accel"])
-        elif speed_error > 2.0:
-            accel = max(0.72, reference["accel"] * 0.95)
-        elif speed_error > -3.0:
-            accel = reference["accel"] * 0.90
-        else:
+        if speed > RECOVERY_TARGET_SPEED + 10.0:
             accel = 0.0
-
-        overspeed = speed - target_speed
-        if overspeed > 28.0:
-            brake = 0.52
-        elif overspeed > 16.0:
-            brake = 0.34
-        elif overspeed > 7.0:
-            brake = 0.18
-        elif overspeed > 4.0:
-            brake = 0.08
+            brake = 0.22
+        elif speed < RECOVERY_TARGET_SPEED - 10.0:
+            accel = 0.35
+            brake = 0.0
         else:
+            accel = 0.15
             brake = 0.0
 
-        if speed > target_speed - 4.0:
-            brake = max(brake, reference["brake"] * 0.70)
-        if brake > 0.05:
-            accel = 0.0
+        return {
+            "steer": steer,
+            "accel": accel,
+            "brake": brake,
+            "gear": reference["gear_action"],
+            "clutch": 0.0,
+            "meta": 0,
+        }
 
-        expert_intent = {
-            "steer": clamp(expert_steer, -1.0, 1.0),
-            "accel": clamp(accel, 0.0, 1.0),
-            "brake": clamp(brake, 0.0, 1.0),
-        }
-        intent = {
-            "steer": clamp(steer, -1.0, 1.0),
-            "accel": expert_intent["accel"],
-            "brake": expert_intent["brake"],
-        }
-        track_info.update({
-            "mode": (
-                "expert"
-                if max(safety_blend, line_slowdown) < 0.5
-                else "recovery"
+    def action(self, sensors):
+        reference = self.profile.reference_at(
+            safe_float(sensors.get("distFromStart"))
+        )
+        if reference is None:
+            raise RuntimeError(self.profile.error or "Dataset non disponibile.")
+
+        speed = safe_float(sensors.get("speedX"))
+        track_pos = safe_float(sensors.get("trackPos"))
+        line_error = track_pos - reference["target_trackPos"]
+        angle_error = (
+            safe_float(sensors.get("angle")) - reference["target_angle"]
+        )
+        lateral_error = (
+            safe_float(sensors.get("speedY")) - reference["target_speedY"]
+        )
+        danger = clamp(reference["danger_score"], 0.0, 1.0)
+        reliability = clamp(reference["reliability"], 0.0, 1.0)
+
+        correction_limit = (
+            MAX_STEER_CORRECTION - 0.04 * danger
+        ) * blend(
+            MIN_RELIABILITY_CORRECTION_FACTOR,
+            1.0,
+            reliability,
+        )
+        speed_scale = clamp(
+            abs(speed) / max(abs(reference["target_speedX"]), 1.0),
+            MIN_CORRECTION_SPEED_SCALE,
+            1.0,
+        )
+        raw_correction = (
+            angle_error * STEER_ANGLE_GAIN
+            - line_error * STEER_POSITION_GAIN
+            - lateral_error * STEER_LATERAL_GAIN
+        ) * speed_scale
+        steering_correction = clamp(
+            raw_correction,
+            -correction_limit,
+            correction_limit,
+        )
+
+        replay_action = {
+            "steer": clamp(
+                reference["steer_action"] + steering_correction,
+                -1.0,
+                1.0,
             ),
-            "target_speed": target_speed,
-            "expert_speed": reference["speedX"],
-            "expert_track_pos": reference["trackPos"],
-            "expert_angle": reference["angle"],
+            "accel": clamp(reference["accel_action"], 0.0, 1.0),
+            "brake": clamp(reference["brake_action"], 0.0, 1.0),
+            "gear": reference["gear_action"],
+            "clutch": 0.0,
+            "meta": 0,
+        }
+
+        danger_factor = 1.0 - 0.20 * danger
+        enter_line = RECOVERY_ENTER_LINE_ERROR * danger_factor
+        exit_line = RECOVERY_EXIT_LINE_ERROR * danger_factor
+        enter_angle = RECOVERY_ENTER_ANGLE_ERROR * danger_factor
+        exit_angle = RECOVERY_EXIT_ANGLE_ERROR * danger_factor
+        enter_lateral = RECOVERY_ENTER_LATERAL_ERROR * danger_factor
+        exit_lateral = RECOVERY_EXIT_LATERAL_ERROR * danger_factor
+        target_abs_track = abs(reference["target_trackPos"])
+        enter_track = max(
+            RECOVERY_ENTER_TRACK_POS - 0.08 * danger,
+            min(0.99, target_abs_track + 0.05),
+        )
+        exit_track = max(
+            RECOVERY_EXIT_TRACK_POS - 0.04 * danger,
+            min(0.94, target_abs_track + 0.02),
+        )
+        recovery_blend_in = RECOVERY_BLEND_IN + 0.04 * danger
+
+        enter_recovery = (
+            abs(line_error) > enter_line
+            or abs(angle_error) > enter_angle
+            or abs(lateral_error) > enter_lateral
+            or abs(track_pos) > enter_track
+        )
+        exit_recovery = (
+            abs(line_error) < exit_line
+            and abs(angle_error) < exit_angle
+            and abs(lateral_error) < exit_lateral
+            and abs(track_pos) < exit_track
+        )
+        if enter_recovery:
+            self.recovery_active = True
+        elif self.recovery_active and exit_recovery:
+            self.recovery_active = False
+
+        target_blend = 1.0 if self.recovery_active else 0.0
+        if target_blend > self.recovery_blend:
+            self.recovery_blend = min(
+                target_blend,
+                self.recovery_blend + recovery_blend_in,
+            )
+        else:
+            self.recovery_blend = max(
+                target_blend,
+                self.recovery_blend - RECOVERY_BLEND_OUT,
+            )
+
+        recovery_action = self._recovery_action(sensors, reference)
+        action = replay_action.copy()
+        for key in ("steer", "accel", "brake"):
+            action[key] = blend(
+                replay_action[key],
+                recovery_action[key],
+                self.recovery_blend,
+            )
+        if action["brake"] > 0.05:
+            action["accel"] = 0.0
+
+        diagnostics = {
+            "mode": "recovery" if self.recovery_blend > 0.0 else "replay",
+            "recovery_blend": self.recovery_blend,
             "line_error": line_error,
             "angle_error": angle_error,
-            "safety_blend": safety_blend,
-        })
-        return intent, track_info, fallback_intent, expert_intent, True
+            "lateral_error": lateral_error,
+            "steering_correction": steering_correction,
+            "correction_limit": correction_limit,
+            "enter_line": enter_line,
+            "enter_angle": enter_angle,
+            "enter_lateral": enter_lateral,
+            "enter_track": enter_track,
+            "recovery_blend_in": recovery_blend_in,
+            "reference": reference,
+            "replay_action": replay_action,
+        }
+        return action, diagnostics
 
 
 class TraceLogger:
     FIELDS = [
-        "step", "distFromStart", "speedX", "speedY", "angle", "trackPos",
-        "mode", "front", "curve_strength", "target_speed", "expert_speed",
-        "expert_track_pos", "expert_angle", "line_error", "angle_error",
-        "safety_blend",
-        "base_steer", "expert_steer", "intent_steer", "final_steer",
-        "final_accel", "final_brake", "gear", "steer_limit",
-        "abs_release", "traction_cut", "profile_used",
+        "step", "distFromStart", "profile_bin", "danger_sector",
+        "speedX", "speedY", "trackPos", "angle", "target_speedX",
+        "target_speedY", "target_trackPos", "target_angle", "trackPos_mad",
+        "angle_mad", "reliability", "danger_score", "danger_level", "mode",
+        "recovery_blend", "line_error", "angle_error", "lateral_error",
+        "correction_limit", "steering_correction", "enter_line",
+        "enter_angle", "enter_lateral", "enter_track", "recovery_blend_in",
+        "recorded_steer", "final_steer", "recorded_accel", "final_accel",
+        "recorded_brake", "final_brake", "recorded_gear", "final_gear",
+        "damage", "offtrack",
     ]
 
-    def __init__(self):
-        os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
-        self.file = open(TRACE_PATH, "w", newline="", encoding="utf-8")
+    def __init__(self, path=TRACE_PATH):
+        self.path = path
+        self.file = open(path, "w", newline="", encoding="utf-8")
         self.writer = csv.DictWriter(self.file, fieldnames=self.FIELDS)
         self.writer.writeheader()
 
-    def write(
-        self,
-        step,
-        sensors,
-        track_info,
-        base_intent,
-        expert_intent,
-        intent,
-        action,
-        diagnostics,
-        used_profile,
-    ):
+    def write(self, step, sensors, action, diagnostics):
         if step % TRACE_EVERY != 0:
             return
-
-        row = {
+        reference = diagnostics["reference"]
+        self.writer.writerow({
             "step": step,
-            "distFromStart": round(safe_float(sensors.get("distFromStart")), 3),
-            "speedX": round(safe_float(sensors.get("speedX")), 3),
-            "speedY": round(safe_float(sensors.get("speedY")), 3),
-            "angle": round(safe_float(sensors.get("angle")), 5),
-            "trackPos": round(safe_float(sensors.get("trackPos")), 5),
-            "mode": track_info["mode"],
-            "front": round(track_info["front"], 3),
-            "curve_strength": round(track_info["curve_strength"], 4),
-            "target_speed": round(track_info["target_speed"], 3),
-            "expert_speed": round(track_info["expert_speed"], 3),
-            "expert_track_pos": round(track_info["expert_track_pos"], 5),
-            "expert_angle": round(track_info["expert_angle"], 5),
-            "line_error": round(track_info["line_error"], 5),
-            "angle_error": round(track_info["angle_error"], 5),
-            "safety_blend": round(track_info["safety_blend"], 4),
-            "base_steer": round(base_intent["steer"], 5),
-            "expert_steer": (
-                round(expert_intent["steer"], 5)
-                if expert_intent is not None
-                else ""
-            ),
-            "intent_steer": round(intent["steer"], 5),
-            "final_steer": round(action["steer"], 5),
-            "final_accel": round(action["accel"], 5),
-            "final_brake": round(action["brake"], 5),
-            "gear": action["gear"],
-            "steer_limit": round(diagnostics["steer_limit"], 5),
-            "abs_release": round(diagnostics["abs_release"], 5),
-            "traction_cut": round(diagnostics["traction_cut"], 5),
-            "profile_used": int(used_profile),
-        }
-        self.writer.writerow(row)
+            "distFromStart": safe_float(sensors.get("distFromStart")),
+            "profile_bin": reference["bin_index"],
+            "danger_sector": reference["danger_sector"],
+            "speedX": safe_float(sensors.get("speedX")),
+            "speedY": safe_float(sensors.get("speedY")),
+            "trackPos": safe_float(sensors.get("trackPos")),
+            "angle": safe_float(sensors.get("angle")),
+            "target_speedX": reference["target_speedX"],
+            "target_speedY": reference["target_speedY"],
+            "target_trackPos": reference["target_trackPos"],
+            "target_angle": reference["target_angle"],
+            "trackPos_mad": reference["trackPos_mad"],
+            "angle_mad": reference["angle_mad"],
+            "reliability": reference["reliability"],
+            "danger_score": reference["danger_score"],
+            "danger_level": reference["danger_level"],
+            "mode": diagnostics["mode"],
+            "recovery_blend": diagnostics["recovery_blend"],
+            "line_error": diagnostics["line_error"],
+            "angle_error": diagnostics["angle_error"],
+            "lateral_error": diagnostics["lateral_error"],
+            "correction_limit": diagnostics["correction_limit"],
+            "steering_correction": diagnostics["steering_correction"],
+            "enter_line": diagnostics["enter_line"],
+            "enter_angle": diagnostics["enter_angle"],
+            "enter_lateral": diagnostics["enter_lateral"],
+            "enter_track": diagnostics["enter_track"],
+            "recovery_blend_in": diagnostics["recovery_blend_in"],
+            "recorded_steer": reference["steer_action"],
+            "final_steer": action["steer"],
+            "recorded_accel": reference["accel_action"],
+            "final_accel": action["accel"],
+            "recorded_brake": reference["brake_action"],
+            "final_brake": action["brake"],
+            "recorded_gear": reference["gear_action"],
+            "final_gear": action["gear"],
+            "damage": safe_float(sensors.get("damage")),
+            "offtrack": int(abs(safe_float(sensors.get("trackPos"))) > 1.0),
+        })
 
     def close(self):
         self.file.close()
@@ -805,116 +1319,196 @@ class TraceLogger:
 
 class RunSummary:
     FIELDS = [
-        "timestamp", "driver_version", "dataset_rows", "profile_bins",
-        "profile_steps", "steps", "elapsed_s", "lap_time",
-        "avg_speed", "max_speed", "final_damage", "offtrack_steps",
-        "avg_abs_steer", "max_abs_steer", "steer_direction_changes",
-        "abs_steps", "tcs_steps", "reason",
+        "timestamp", "driver_version", "selected_run_id",
+        "selected_lap_time", "dataset_laps", "profile_points", "steps",
+        "lap_time", "damage", "offtrack_steps", "recovery_steps",
+        "avg_speed", "max_speed", "avg_danger", "max_danger",
+        "critical_steps", "critical_time_s", "recovery_low",
+        "recovery_medium", "recovery_high", "recovery_critical",
+        "recovery_low_time_s", "recovery_medium_time_s",
+        "recovery_high_time_s", "recovery_critical_time_s",
+        "avg_line_error", "max_line_error", "reason",
     ]
 
     def __init__(self, profile):
         self.profile = profile
-        self.start_time = time.time()
         self.steps = 0
-        self.profile_steps = 0
+        self.offtrack_steps = 0
+        self.recovery_steps = 0
         self.speed_sum = 0.0
         self.max_speed = 0.0
-        self.offtrack_steps = 0
-        self.abs_steer_sum = 0.0
-        self.max_abs_steer = 0.0
-        self.steer_direction_changes = 0
-        self.last_steer_direction = 0
-        self.abs_steps = 0
-        self.tcs_steps = 0
+        self.danger_sum = 0.0
+        self.max_danger = 0.0
+        self.critical_steps = 0
+        self.recovery_by_level = {
+            "low": 0,
+            "medium": 0,
+            "high": 0,
+            "critical": 0,
+        }
+        self.recovery_time_by_level = {
+            "low": 0.0,
+            "medium": 0.0,
+            "high": 0.0,
+            "critical": 0.0,
+        }
+        self.critical_time = 0.0
+        self.previous_lap_time = None
+        self.line_error_sum = 0.0
+        self.max_line_error = 0.0
         self.final_sensors = {}
 
-    def record(self, sensors, action, diagnostics, used_profile):
+    def record(self, sensors, diagnostics):
         speed = safe_float(sensors.get("speedX"))
         track = safe_list(sensors.get("track"), 19, 200.0)
-        steer = safe_float(action.get("steer"))
+        danger = diagnostics["reference"]["danger_score"]
+        level = diagnostics["reference"]["danger_level"]
+        line_error = abs(diagnostics["line_error"])
+        recovering = diagnostics["recovery_blend"] > 0.0
+        current_lap_time = safe_float(sensors.get("curLapTime"))
+        delta_time = 0.0
+        if self.previous_lap_time is not None:
+            measured_delta = current_lap_time - self.previous_lap_time
+            if 0.0 < measured_delta <= 1.0:
+                delta_time = measured_delta
+        self.previous_lap_time = current_lap_time
+
         self.steps += 1
-        self.profile_steps += int(used_profile)
         self.speed_sum += speed
         self.max_speed = max(self.max_speed, speed)
-        self.abs_steer_sum += abs(steer)
-        self.max_abs_steer = max(self.max_abs_steer, abs(steer))
-
-        steer_direction = 0
-        if steer > 0.025:
-            steer_direction = 1
-        elif steer < -0.025:
-            steer_direction = -1
-        if (
-            steer_direction != 0
-            and self.last_steer_direction != 0
-            and steer_direction != self.last_steer_direction
-        ):
-            self.steer_direction_changes += 1
-        if steer_direction != 0:
-            self.last_steer_direction = steer_direction
-
+        self.danger_sum += danger
+        self.max_danger = max(self.max_danger, danger)
+        self.critical_steps += int(level == "critical")
+        if level == "critical":
+            self.critical_time += delta_time
+        self.line_error_sum += line_error
+        self.max_line_error = max(self.max_line_error, line_error)
         self.offtrack_steps += int(
-            abs(safe_float(sensors.get("trackPos"))) > 1.0 or min(track) < 0.0
+            abs(safe_float(sensors.get("trackPos"))) > 1.0
+            or min(track) < 0.0
         )
-        self.abs_steps += int(diagnostics["abs_release"] > 0.0)
-        self.tcs_steps += int(diagnostics["traction_cut"] > 0.0)
+        self.recovery_steps += int(recovering)
+        if recovering:
+            self.recovery_by_level[level] += 1
+            self.recovery_time_by_level[level] += delta_time
         self.final_sensors = sensors.copy()
 
     def write(self, reason):
-        os.makedirs(os.path.dirname(AUTO_RESULTS_PATH), exist_ok=True)
         row = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "driver_version": DRIVER_VERSION,
-            "dataset_rows": self.profile.rows,
-            "profile_bins": len(self.profile.bins),
-            "profile_steps": self.profile_steps,
+            "selected_run_id": self.profile.selected_run_id,
+            "selected_lap_time": self.profile.selected_lap_time,
+            "dataset_laps": self.profile.laps,
+            "profile_points": len(self.profile.profile),
             "steps": self.steps,
-            "elapsed_s": round(time.time() - self.start_time, 3),
-            "lap_time": round(safe_float(self.final_sensors.get("lastLapTime")), 3),
-            "avg_speed": round(self.speed_sum / self.steps, 3) if self.steps else 0.0,
-            "max_speed": round(self.max_speed, 3),
-            "final_damage": round(safe_float(self.final_sensors.get("damage")), 3),
+            "lap_time": safe_float(self.final_sensors.get("lastLapTime")),
+            "damage": safe_float(self.final_sensors.get("damage")),
             "offtrack_steps": self.offtrack_steps,
-            "avg_abs_steer": (
-                round(self.abs_steer_sum / self.steps, 5)
-                if self.steps
-                else 0.0
+            "recovery_steps": self.recovery_steps,
+            "avg_speed": self.speed_sum / self.steps if self.steps else 0.0,
+            "max_speed": self.max_speed,
+            "avg_danger": (
+                self.danger_sum / self.steps if self.steps else 0.0
             ),
-            "max_abs_steer": round(self.max_abs_steer, 5),
-            "steer_direction_changes": self.steer_direction_changes,
-            "abs_steps": self.abs_steps,
-            "tcs_steps": self.tcs_steps,
+            "max_danger": self.max_danger,
+            "critical_steps": self.critical_steps,
+            "critical_time_s": self.critical_time,
+            "recovery_low": self.recovery_by_level["low"],
+            "recovery_medium": self.recovery_by_level["medium"],
+            "recovery_high": self.recovery_by_level["high"],
+            "recovery_critical": self.recovery_by_level["critical"],
+            "recovery_low_time_s": self.recovery_time_by_level["low"],
+            "recovery_medium_time_s": (
+                self.recovery_time_by_level["medium"]
+            ),
+            "recovery_high_time_s": self.recovery_time_by_level["high"],
+            "recovery_critical_time_s": (
+                self.recovery_time_by_level["critical"]
+            ),
+            "avg_line_error": (
+                self.line_error_sum / self.steps if self.steps else 0.0
+            ),
+            "max_line_error": self.max_line_error,
             "reason": reason,
         }
-        file_exists = (
+        self._ensure_compatible_results_file()
+        exists = (
             os.path.exists(AUTO_RESULTS_PATH)
             and os.path.getsize(AUTO_RESULTS_PATH) > 0
         )
-        with open(AUTO_RESULTS_PATH, "a", newline="", encoding="utf-8") as result_file:
-            writer = csv.DictWriter(result_file, fieldnames=self.FIELDS)
-            if not file_exists:
+        with open(AUTO_RESULTS_PATH, "a", newline="", encoding="utf-8") as out:
+            writer = csv.DictWriter(out, fieldnames=self.FIELDS)
+            if not exists:
                 writer.writeheader()
             writer.writerow(row)
 
+    @classmethod
+    def _ensure_compatible_results_file(cls):
+        if not os.path.exists(AUTO_RESULTS_PATH):
+            return
+        try:
+            with open(
+                AUTO_RESULTS_PATH,
+                newline="",
+                encoding="utf-8",
+            ) as source:
+                fields = csv.DictReader(source).fieldnames
+        except OSError:
+            return
+        if fields == cls.FIELDS:
+            return
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        archived = os.path.join(
+            BASE_DIR,
+            "auto_v3_runs_legacy_%s.csv" % timestamp,
+        )
+        os.replace(AUTO_RESULTS_PATH, archived)
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="V3 multigiro post-ADAS per TORCS Corkscrew.",
+    )
+    parser.add_argument(
+        "--analyze-only",
+        action="store_true",
+        help="Genera i quattro report senza collegarsi a TORCS.",
+    )
+    return parser.parse_args()
+
 
 def main():
-    profile = ExpertProfile()
-    policy = ExpertGuidedPolicy(profile)
-    adas = SharedADAS()
+    arguments = parse_arguments()
+    profile = CorkscrewProfile()
+    if not profile.available:
+        raise SystemExit("[DATASET] %s" % profile.error)
+
+    paths = profile.export_reports()
+    print("[DRIVER] %s" % DRIVER_VERSION)
+    print(
+        "[DATASET] %d giri; migliore %s (%.3f s); "
+        "%d punti su %.1f m."
+        % (
+            profile.laps,
+            profile.selected_run_id,
+            profile.selected_lap_time,
+            len(profile.profile),
+            profile.track_length,
+        )
+    )
+    for label, path in paths.items():
+        print("[REPORT:%s] %s" % (label.upper(), path))
+
+    if arguments.analyze_only:
+        print("[STOP] analyze_only")
+        return
+
+    policy = PostAdasReplayPolicy(profile)
     summary = RunSummary(profile)
     trace = TraceLogger()
-    client = legacy_auto.Client(p=PORT)
+    client = snakeoil3.Client(p=PORT)
     reason = "max_steps"
-
-    print("[DRIVER] %s" % DRIVER_VERSION)
-    if profile.available:
-        print("[DATASET] Profilo umano dominante: %d giro/i, %d righe, %d settori." % (
-            profile.laps,
-            profile.rows,
-            len(profile.bins),
-        ))
-    else:
-        print("[DATASET] Nessun profilo valido: guida automatica base.")
 
     try:
         for step in range(MAX_STEPS):
@@ -922,34 +1516,16 @@ def main():
             if not client.so:
                 reason = "server_closed"
                 break
-
             sensors = client.S.d
             if safe_float(sensors.get("lastLapTime")) > 0.0:
                 summary.final_sensors = sensors.copy()
                 reason = "lap_complete"
                 break
 
-            (
-                intent,
-                track_info,
-                base_intent,
-                expert_intent,
-                used_profile,
-            ) = policy.intention(sensors)
-            action, diagnostics = adas.apply(sensors, intent)
+            action, diagnostics = policy.action(sensors)
             client.R.d.update(action)
-            summary.record(sensors, action, diagnostics, used_profile)
-            trace.write(
-                step,
-                sensors,
-                track_info,
-                base_intent,
-                expert_intent,
-                intent,
-                action,
-                diagnostics,
-                used_profile,
-            )
+            summary.record(sensors, diagnostics)
+            trace.write(step, sensors, action, diagnostics)
             client.respond_to_server()
     except KeyboardInterrupt:
         reason = "keyboard_interrupt"
@@ -957,8 +1533,8 @@ def main():
         trace.close()
         summary.write(reason)
         client.shutdown()
-        print("Risultato salvato in %s" % AUTO_RESULTS_PATH)
-        print("Telemetria salvata in %s" % TRACE_PATH)
+        print("[STOP] %s" % reason)
+        print("[TRACE] %s" % TRACE_PATH)
 
 
 if __name__ == "__main__":

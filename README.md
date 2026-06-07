@@ -1,133 +1,85 @@
-# crAIzy pilots - TORCS Plug and Play
+# crAIzy pilots - V3 multigiro post-ADAS
 
-Progetto Python per TORCS / IBM AI Racing League sul circuito Corkscrew.
+AI driver Python per TORCS specializzato sul circuito Corkscrew.
 
-La cartella contiene due modalita di guida:
+## File ufficiali
 
-- `craizy_manual.py`: guida con DualShock 4 e raccolta del dataset;
-- `craizy_auto_v3.py`: guida automatica principale basata sul profilo umano;
-- `craizy_auto_v2.py`: guida autonoma stabile con controllo anti-oscillazione;
-- `craizy_auto.py`: prima versione del pilota automatico, conservata invariata.
+- `craizy_manual.py`: guida con controller PS4 e registra intenzione e azione
+  post-ADAS realmente inviata a TORCS.
+- `craizy_auto_v3.py`: costruisce il profilo multigiro e guida.
+- `snakeoil3_jm2.py`: comunicazione con `scr_server 1`.
+- `torcs_ps4_dataset.csv`: dataset originale, creato dal manuale.
 
-I file originali usati come base restano nella radice e non vengono modificati:
+V2 e V4 sono esperimenti storici indipendenti. V3 non importa altri piloti.
 
-- `controller_ps4_torcs_dataset_auto_stop_v2 (1).py`;
-- `torcs_jm_par_modulare.py`.
-
-## Requisiti
-
-- Python 3;
-- `pygame`;
-- TORCS gia installato e configurato;
-- `scr_server 1` in ascolto sulla porta `3001`.
-
-Installazione:
+## Raccolta Dataset
 
 ```powershell
-py -m pip install -r requirements.txt
+conda activate torcs-env
+python craizy_manual.py
 ```
 
-## Preparazione TORCS
+- `SELECT/SHARE`: scarta il tentativo e riavvia.
+- `START/OPTIONS`: scarta il tentativo e riavvia.
+- Un giro completo pulito viene aggiunto al dataset principale.
 
-1. Apri TORCS.
-2. Seleziona il circuito Corkscrew.
-3. Seleziona `scr_server 1` come pilota.
-4. Avvia la gara e lascia TORCS in attesa del client Python.
+Servono almeno tre giri post-ADAS completi, senza danni e senza uscite.
+I segmenti parziali non vengono salvati né usati dal profilo multigiro.
 
-La cartella del gioco TORCS non fa parte di questo repository.
+## Profilo Corkscrew
 
-## Guida manuale e dataset
+Ad ogni avvio V3:
 
-Collega il DualShock 4 tramite USB o Bluetooth, poi esegui:
+1. valida tutti i giri;
+2. stima la lunghezza pista dalla mediana;
+3. sceglie il giro più veloce per gas, freno, sterzo e marcia;
+4. ricampiona ogni giro su una griglia circolare da `5 m`;
+5. calcola racing line, velocità mediana, MAD e affidabilità;
+6. rileva le zone di frenata sui campioni temporali originali;
+7. costruisce una danger map ogni `20 m`.
+
+La danger map modifica soltanto limite della correzione sterzo e soglie del
+recovery. Non cambia gas, freno o marcia durante il replay normale.
+
+## Analisi Senza TORCS
 
 ```powershell
-py craizy_manual.py
+python craizy_auto_v3.py --analyze-only
 ```
 
-Comandi predefiniti:
-
-- stick sinistro: sterzo;
-- `R2`: acceleratore;
-- `L2`: freno;
-- `SHARE`: scarta il tentativo e riavvia pista e registrazione;
-- `OPTIONS`: salva il tentativo valido e riavvia pista e registrazione;
-- `Ctrl+C`: scarta ed esce.
-
-Il dataset viene scritto in:
+Genera:
 
 ```text
-torcs_ps4_dataset.csv
+results/corkscrew_profile_5m.csv
+results/corkscrew_danger_20m.csv
+results/corkscrew_braking_zones.csv
+results/corkscrew_lap_comparison.csv
 ```
 
-Un giro completo viene salvato automaticamente. `OPTIONS` permette anche di
-salvare manualmente il buffer valido corrente prima di ripartire. Un fuori
-pista, `SHARE`, una disconnessione o un'interruzione eliminano invece le righe
-temporanee del tentativo.
+Il profilo contiene sia valori TORCS reali sia colonne normalizzate per
+analisi e futuro machine learning. Il dataset originale non viene modificato.
 
-Dopo il traguardo non premere pulsanti: il controller salva e chiude
-automaticamente, anche quando il server TORCS termina subito la gara.
-`Ctrl+C` serve sempre a scartare il tentativo corrente.
-
-Il CSV salva sensori TORCS e intenzioni del pilota prima degli aiuti elettronici.
-ABS, controllo trazione, smoothing e limite sterzo non contaminano quindi i
-target che verranno usati dal pilota automatico.
-
-Il mapping predefinito pygame e:
-
-```text
-asse 0 = stick sinistro X
-asse 4 = L2
-asse 5 = R2
-pulsante 4 = SHARE
-pulsante 6 = OPTIONS
-```
-
-Se il sistema assegna numeri diversi al controller, modifica le costanti
-raccolte all'inizio di `craizy_manual.py`.
-
-## Guida automatica
-
-Avvia TORCS nello stesso modo, poi:
+## Avvio Pilota
 
 ```powershell
-py craizy_auto_v3.py
+python craizy_auto_v3.py
 ```
 
-La V3:
+Nel replay normale:
 
-1. legge `torcs_ps4_dataset.csv` dalla stessa cartella dello script;
-2. considera soltanto i giri completi;
-3. costruisce velocita e traiettoria umane per settori di 5 metri;
-4. combina piu giri dando a ciascuno lo stesso peso;
-5. ignora automaticamente partenze e tentativi parziali;
-6. usa il profilo umano come guida principale per tutto il giro;
-7. anticipa le frenate osservando i settori successivi;
-8. usa il pilota base soltanto per partenza e assenza del dataset.
+- le azioni post-ADAS provengono dal giro migliore;
+- la racing line sfrutta il consenso tra tutti i giri;
+- la correzione sterzo non supera `+-0,12`;
+- bassa affidabilità e danger elevato riducono la correzione;
+- recovery usa isteresi e blend graduale.
 
-Il riepilogo di ogni prova viene aggiunto a:
+## Verifica
 
-```text
-auto_v3_runs.csv
+```powershell
+python -m unittest -v test_post_adas_v3.py
 ```
 
-La telemetria dettagliata dell'ultima prova viene scritta in:
+Gate 1: un giro completo, danno zero e zero uscite.
 
-```text
-auto_v3_trace.csv
-```
-
-## Struttura
-
-```text
-craizy_auto.py
-craizy_auto_v2.py
-craizy_auto_v3.py
-craizy_manual.py
-torcs_ps4_dataset.csv
-torcs_jm_par_modulare.py
-controller_ps4_torcs_dataset_auto_stop_v2 (1).py
-snakeoil3_jm2.py
-```
-
-Le costanti principali sono raccolte all'inizio di `craizy_auto_v3.py` e
-`craizy_manual.py`. Non sono necessari file di configurazione o argomenti CLI.
+Gate 2: tre giri consecutivi, danno zero, zero uscite e nessun recovery
+grave. KNN verrà valutato soltanto dopo il Gate 2.
