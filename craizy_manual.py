@@ -26,8 +26,9 @@ DATASET_COLUMNS = [
     "rpm", "damage", "distFromStart",
 ]
 
-OFFTRACK_CONFIRM_TICKS = 10
-OFFTRACK_TRACK_POS = 1.05
+OFFTRACK_CONFIRM_TICKS = 3
+OFFTRACK_TRACK_POS = 1.0
+DAMAGE_TOLERANCE = 0.0
 PRINT_EVERY = 50
 SERVER_SILENCE_TIMEOUTS = 3
 SERVER_FINISH_MIN_SECONDS = 45.0
@@ -457,6 +458,7 @@ class TransactionalDataset:
         self.valid = True
         self.invalid_reason = ""
         self.offtrack_ticks = 0
+        self.initial_damage = None
         self.run_id = str(time.time_ns())
 
     def reset(self):
@@ -464,6 +466,7 @@ class TransactionalDataset:
         self.valid = True
         self.invalid_reason = ""
         self.offtrack_ticks = 0
+        self.initial_damage = None
         self.run_id = str(time.time_ns())
 
     def discard(self, reason):
@@ -476,7 +479,11 @@ class TransactionalDataset:
     def observe_track(self, sensors):
         track = safe_list(sensors.get("track", [200.0] * 19), 19, 200.0)
         track_pos = abs(safe_float(sensors.get("trackPos", 0.0)))
-        offtrack = track_pos > OFFTRACK_TRACK_POS or min(track) < 0.0
+        damage = safe_float(sensors.get("damage", 0.0))
+        if self.initial_damage is None:
+            self.initial_damage = damage
+
+        offtrack = track_pos >= OFFTRACK_TRACK_POS or min(track) < 0.0
 
         if offtrack:
             self.offtrack_ticks += 1
@@ -490,6 +497,19 @@ class TransactionalDataset:
                 "\n[DATASET] Tentativo invalidato: fuori pista. "
                 "Premi SELECT/SHARE o START/OPTIONS per scartare "
                 "e ripartire."
+            )
+
+        if (
+            self.valid
+            and damage > self.initial_damage + DAMAGE_TOLERANCE
+        ):
+            self.valid = False
+            self.invalid_reason = "damage"
+            print(
+                "\n[DATASET] Tentativo invalidato: danno aumentato "
+                "da %.1f a %.1f. Premi SELECT/SHARE o START/OPTIONS "
+                "per scartare e ripartire."
+                % (self.initial_damage, damage)
             )
 
     def append(self, sensors, intention, action, step):
@@ -539,24 +559,35 @@ class RaceProgress:
     def __init__(self):
         self.max_dist_raced = 0.0
         self.max_dist_from_start = 0.0
+        self.initial_dist_raced = None
+        self.moving_ticks = 0
+        self.max_speed = 0.0
 
     def observe(self, sensors):
-        self.max_dist_raced = max(
-            self.max_dist_raced,
-            safe_float(sensors.get("distRaced", 0.0)),
-        )
+        dist_raced = safe_float(sensors.get("distRaced", 0.0))
+        speed = abs(safe_float(sensors.get("speedX", 0.0)))
+        if self.initial_dist_raced is None:
+            self.initial_dist_raced = dist_raced
+        self.max_dist_raced = max(self.max_dist_raced, dist_raced)
         self.max_dist_from_start = max(
             self.max_dist_from_start,
             safe_float(sensors.get("distFromStart", 0.0)),
         )
+        self.moving_ticks += int(speed > 5.0)
+        self.max_speed = max(self.max_speed, speed)
 
     def confirms_corkscrew_finish(self, elapsed, dataset):
-        distance = max(self.max_dist_raced, self.max_dist_from_start)
+        raced_distance = self.max_dist_raced - safe_float(
+            self.initial_dist_raced,
+            0.0,
+        )
         return (
             dataset.valid
             and len(dataset.rows) >= SERVER_FINISH_MIN_ROWS
             and elapsed >= SERVER_FINISH_MIN_SECONDS
-            and distance >= SERVER_FINISH_MIN_DISTANCE
+            and raced_distance >= SERVER_FINISH_MIN_DISTANCE
+            and self.moving_ticks >= SERVER_FINISH_MIN_ROWS
+            and self.max_speed >= 30.0
         )
 
 

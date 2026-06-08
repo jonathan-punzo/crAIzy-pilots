@@ -7,5 +7,4 @@ venv/
 results/*.csv
 auto_*_runs.csv
 auto_*_trace.csv
-torcs_ps4_partial_dataset.csv
 logs/*.csv
