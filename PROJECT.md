@@ -41,6 +41,25 @@ The interface between the modules is inside the `RuntimePolicy` / `Driver` execu
 - `torcs_ps4_dataset.csv` — CSV file containing professional demonstrations for KNN training.
 - `logs/` — Directory containing traces (`auto_v8_latest.csv`) and run summaries.
 
+## Track Blocks
+The Corkscrew track is represented by one ordered `TRACK_BLOCKS` catalog.
+Each block has a name, distance interval, driving role and protection flag:
+
+| Block | Distance | Role |
+|---|---:|---|
+| S01 | 0-330 m | Start straight |
+| S02_FIRST_CORNER | 330-550 m | Protected first corner |
+| S03 | 550-1000 m | Technical |
+| S04 | 1000-1500 m | Fast |
+| S05 | 1500-2000 m | Technical |
+| S06 | 2000-2330 m | Corkscrew approach |
+| S07_CORKSCREW | 2330-2530 m | Protected Corkscrew |
+| S08 | 2530-3080 m | Technical |
+| S09_LAST_CORNER | 3080-3310 m | Protected last corner |
+| S10 | 3310-3610 m | Finish straight |
+
+Telemetry, validation and future local policies use this shared catalog.
+
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|

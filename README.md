@@ -33,6 +33,10 @@ deviazione standard, velocita' media e massimo `trackPos` per settore.
 Il trace completo di ogni tentativo viene conservato in
 `logs/auto_v8_runs/`, con timestamp e indicazione `clean` oppure `error`;
 `logs/auto_v8_latest.csv` continua a contenere l'ultimo giro.
+Il circuito e' suddiviso in dieci blocchi `TRACK_BLOCKS`; ogni riga dei
+nuovi trace include `track_block` e `track_block_role`. Questa struttura
+e' condivisa da telemetria e validazione e consente future policy locali
+senza duplicare intervalli di distanza nel codice.
 
 La V8 v9r4 usa il 96% della velocita' mediana dei giri esperti come
 riferimento minimo nei settori ordinari. Prima curva, Corkscrew e ultima

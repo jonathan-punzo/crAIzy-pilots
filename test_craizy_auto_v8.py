@@ -59,6 +59,42 @@ class BasePolicyTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_track_blocks_cover_named_course_sections(self):
+        expected = (
+            "S01",
+            "S02_FIRST_CORNER",
+            "S03",
+            "S04",
+            "S05",
+            "S06",
+            "S07_CORKSCREW",
+            "S08",
+            "S09_LAST_CORNER",
+            "S10",
+        )
+        self.assertEqual(
+            tuple(block.name for block in v8.TRACK_BLOCKS),
+            expected,
+        )
+        self.assertEqual(
+            v8.track_block_at(400.0).name,
+            "S02_FIRST_CORNER",
+        )
+        self.assertEqual(
+            v8.track_block_at(2400.0).name,
+            "S07_CORKSCREW",
+        )
+        self.assertEqual(
+            v8.track_block_at(3200.0).name,
+            "S09_LAST_CORNER",
+        )
+
+    def test_track_blocks_are_contiguous(self):
+        for left, right in zip(
+            v8.TRACK_BLOCKS, v8.TRACK_BLOCKS[1:]
+        ):
+            self.assertEqual(left.end, right.start)
+
     def test_validation_metrics_collect_sector_values(self):
         metrics = v8.ValidationMetrics()
         metrics.observe(sensors(
@@ -163,6 +199,13 @@ class AdvisorAndSafetyTests(unittest.TestCase):
         self.assertLessEqual(
             abs(prediction["delta_speed"]), v8.MAX_SPEED_ADVICE
         )
+
+    def test_runtime_diagnostics_include_track_block(self):
+        _, diagnostics = v8.RuntimePolicy().action(
+            sensors(distFromStart=1200.0)
+        )
+        self.assertEqual(diagnostics["track_block"], "S04")
+        self.assertEqual(diagnostics["track_block_role"], "fast")
 
     def test_edge_brake_overrides_positive_advice(self):
         state = sensors(trackPos=0.96, speedX=180.0)

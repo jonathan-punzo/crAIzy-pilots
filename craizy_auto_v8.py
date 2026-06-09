@@ -17,6 +17,7 @@ import sys
 import time
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 
 os.environ["LOKY_MAX_CPU_COUNT"] = str(os.cpu_count() or 1)
 warnings.filterwarnings("ignore", category=UserWarning, module="joblib")
@@ -73,17 +74,55 @@ TRACK_SENSOR_ANGLES = (
     0.0,
     5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 75.0, 90.0,
 )
-VALIDATION_SECTORS = (
-    ("S01", 0.0, 330.0),
-    ("S02_FIRST_CORNER", 330.0, 550.0),
-    ("S03", 550.0, 1000.0),
-    ("S04", 1000.0, 1500.0),
-    ("S05", 1500.0, 2000.0),
-    ("S06", 2000.0, 2330.0),
-    ("S07_CORKSCREW", 2330.0, 2530.0),
-    ("S08", 2530.0, 3080.0),
-    ("S09_LAST_CORNER", 3080.0, 3310.0),
-    ("S10", 3310.0, 3610.0),
+
+
+@dataclass(frozen=True)
+class TrackBlock:
+    name: str
+    start: float
+    end: float
+    role: str
+    protected: bool = False
+
+    def contains(self, distance, include_end=False):
+        if include_end:
+            return self.start <= distance <= self.end
+        return self.start <= distance < self.end
+
+
+TRACK_BLOCKS = (
+    TrackBlock("S01", 0.0, FIRST_CORNER_START, "start_straight"),
+    TrackBlock(
+        "S02_FIRST_CORNER",
+        FIRST_CORNER_START,
+        FIRST_CORNER_END,
+        "first_corner",
+        protected=True,
+    ),
+    TrackBlock("S03", FIRST_CORNER_END, 1000.0, "technical"),
+    TrackBlock("S04", 1000.0, 1500.0, "fast"),
+    TrackBlock("S05", 1500.0, 2000.0, "technical"),
+    TrackBlock("S06", 2000.0, CORKSCREW_START, "corkscrew_approach"),
+    TrackBlock(
+        "S07_CORKSCREW",
+        CORKSCREW_START,
+        CORKSCREW_END,
+        "corkscrew",
+        protected=True,
+    ),
+    TrackBlock("S08", CORKSCREW_END, LAST_CORNER_PREPARE_START, "technical"),
+    TrackBlock(
+        "S09_LAST_CORNER",
+        LAST_CORNER_PREPARE_START,
+        LAST_CORNER_END,
+        "last_corner",
+        protected=True,
+    ),
+    TrackBlock("S10", LAST_CORNER_END, 3610.0, "finish_straight"),
+)
+TRACK_BLOCKS_BY_NAME = {block.name: block for block in TRACK_BLOCKS}
+VALIDATION_SECTORS = tuple(
+    (block.name, block.start, block.end) for block in TRACK_BLOCKS
 )
 
 OFFTRACK_CONFIRM_TICKS = 3
@@ -132,6 +171,21 @@ REQUIRED_COLUMNS = (
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
+
+
+def track_block_at(distance):
+    for block in TRACK_BLOCKS:
+        if block.contains(distance):
+            return block
+    if distance >= TRACK_BLOCKS[-1].end:
+        return TRACK_BLOCKS[-1]
+    return TRACK_BLOCKS[0]
+
+
+def distance_in_block(distance, name, include_end=False):
+    return TRACK_BLOCKS_BY_NAME[name].contains(
+        distance, include_end=include_end
+    )
 
 
 def safe_float(value, default=0.0):
@@ -710,12 +764,15 @@ class SafetyGovernor:
         target_speed = clamp(target_speed, 55.0, MAX_OPERATIONAL_SPEED)
 
         distance = safe_float(sensors.get("distFromStart"), -1.0)
-        corkscrew_sector = CORKSCREW_START <= distance <= CORKSCREW_END
-        last_corner_sector = (
-            LAST_CORNER_PREPARE_START <= distance <= LAST_CORNER_END
+        track_block = track_block_at(distance)
+        corkscrew_sector = distance_in_block(
+            distance, "S07_CORKSCREW", include_end=True
         )
-        first_corner_sector = (
-            FIRST_CORNER_START <= distance <= FIRST_CORNER_END
+        last_corner_sector = distance_in_block(
+            distance, "S09_LAST_CORNER", include_end=True
+        )
+        first_corner_sector = distance_in_block(
+            distance, "S02_FIRST_CORNER", include_end=True
         )
         protected_sector = (
             first_corner_sector
@@ -932,6 +989,8 @@ class SafetyGovernor:
             "tight_curve_cap": self.tight_curve_cap,
             "tight_curve_ticks": self.tight_curve_ticks,
             "profile_speed": profile_speed,
+            "track_block": track_block.name,
+            "track_block_role": track_block.role,
             "interventions": "+".join(interventions) or "none",
         }
 
@@ -976,7 +1035,8 @@ class RuntimePolicy:
 class TraceLogger:
     FIELDS = (
         "step", "curLapTime", "distFromStart", "speedX", "speedY",
-        "trackPos", "angle", "damage", "front", "near", "openness",
+        "trackPos", "angle", "damage", "track_block",
+        "track_block_role", "front", "near", "openness",
         "aim_hint", "curve_urgency", "projected_track_pos",
         "tight_curve_cap", "tight_curve_ticks",
         "profile_speed",
@@ -1004,6 +1064,8 @@ class TraceLogger:
             "trackPos": safe_float(sensors.get("trackPos")),
             "angle": safe_float(sensors.get("angle")),
             "damage": safe_float(sensors.get("damage")),
+            "track_block": data["track_block"],
+            "track_block_role": data["track_block_role"],
             "front": data["front"],
             "near": data["near"],
             "openness": data["openness"],
@@ -1066,12 +1128,7 @@ class ValidationMetrics:
 
     @staticmethod
     def sector_name(distance):
-        for name, start, end in VALIDATION_SECTORS:
-            if start <= distance < end:
-                return name
-        if distance >= VALIDATION_SECTORS[-1][2]:
-            return VALIDATION_SECTORS[-1][0]
-        return VALIDATION_SECTORS[0][0]
+        return track_block_at(distance).name
 
     def observe(self, sensors):
         lap_time = safe_float(sensors.get("curLapTime"), -1.0)
