@@ -1,4 +1,76 @@
-# crAIzy pilots - V7 Behavioral Cloning
+# crAIzy pilots - V8 Sensor Base + KNN Advisor
+
+La versione in sviluppo e' `craizy_auto_v8.py`. Combina:
+
+- controllore deterministico basato sui 19 sensori pista;
+- target speed predittivo con frenata proporzionale;
+- KNN residuale limitato a `+/-0,12` sterzo e `+/-25 km/h`;
+- Safety Governor con priorita' alla frenata della base;
+- ABS, TCS e cambio automatico derivati da `craizy_manual.py`.
+
+V6 e V7 restano baseline e non sono importate dalla V8.
+
+## Comandi V8
+
+```powershell
+conda activate torcs-env
+
+python craizy_auto_v8.py --analyze-only
+python craizy_auto_v8.py --base-only --slow
+python craizy_auto_v8.py --base-only
+python craizy_auto_v8.py
+python craizy_auto_v8.py --validation-report --validation-runs 10
+python -m unittest test_craizy_auto_v8.py
+```
+
+La sequenza operativa e': giro lento, giro base, giro completo, quindi tre
+giri completi consecutivi. I trace sono salvati in
+`logs/auto_v8_latest.csv`; i riepiloghi in `results/auto_v8_runs.csv`.
+Ogni tentativo salva inoltre tempo ufficiale e statistiche di dieci
+settori in `results/auto_v8_validation.csv`. Dopo dieci tentativi, il
+comando `--validation-report` mostra affidabilita', best lap, media,
+deviazione standard, velocita' media e massimo `trackPos` per settore.
+Il trace completo di ogni tentativo viene conservato in
+`logs/auto_v8_runs/`, con timestamp e indicazione `clean` oppure `error`;
+`logs/auto_v8_latest.csv` continua a contenere l'ultimo giro.
+
+La V8 v9r4 usa il 96% della velocita' mediana dei giri esperti come
+riferimento minimo nei settori ordinari. Prima curva, Corkscrew e ultima
+curva mantengono i limiti protetti; il riferimento veloce viene
+disattivato quando l'auto ha troppo moto laterale. Nelle curve ordinarie
+il limite sensoriale puo' salire fino al 90% della velocita' esperta
+locale, evitando che il mantenimento curva rallenti oltre meta' giro.
+La revisione `r1` anticipa la frenata della prima curva e rinforza il
+rientro soltanto vicino al bordo nei settori protetti. La revisione `r4`
+mantiene invariata la V9r1 nei passaggi normali e attiva un recupero
+locale soltanto quando, tra 2240 e 2370 metri, la posizione proiettata
+esce dal corridoio osservato nei giri puliti.
+
+## Validazione TORCS V9r4
+
+Prima sessione di conferma:
+
+- `5/5` giri completati senza uscita o recovery;
+- affidabilita' `100%`;
+- best lap `88,422 s`;
+- mediana `88,946 s`;
+- deviazione standard `0,627 s`.
+
+La prossima fase e' una validazione estesa da almeno 10-20 giri prima di
+ulteriori incrementi prestazionali.
+
+## Benchmark Offline V8
+
+Leave-one-lap-out sui quattro giri esperti:
+
+| Comando | Base | Base + advisor |
+|---|---:|---:|
+| MAE sterzo | 0,1605 | 0,1095 |
+| MAE pedale firmato | 0,5914 | 0,4389 |
+
+Inferenza KNN al 95 percentile: circa `1,18 ms`, sotto il gate di `1,5 ms`.
+
+## Archivio V7
 
 Driver autonomo Python per TORCS basato sul metodo di imitation learning
 presentato nelle slide del corso.

@@ -44,7 +44,8 @@ The interface between the modules is inside the `RuntimePolicy` / `Driver` execu
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | Phase 1: Base Sensory Bot | Implement deterministic sensory steer and target speed control. Complete corkscrew lap at 60-90 km/h. | None | PLANNED |
-| 2 | Phase 2: Target Speed Sensoriale | Optimize target speed based on 19 track sensors to decelerate before curves. | M1 | PLANNED |
-| 3 | Phase 3: KNN Advisor | Train KNN on torcs_ps4_dataset.csv and integrate as residual advisor with rigid clamp. | M2 | PLANNED |
-| 4 | Phase 4: Safety Governor & ADAS | Implement Safety Governor rules and integrate ADAS. Pass E2E test (3 consecutive clean laps). | M3 | PLANNED |
+| 1 | Phase 1: Base Sensory Bot | Implement deterministic sensory steer and target speed control. Complete corkscrew lap at 60-90 km/h. | None | COMPLETE |
+| 2 | Phase 2: Target Speed Sensoriale | Optimize target speed based on 19 track sensors to decelerate before curves. | M1 | COMPLETE |
+| 3 | Phase 3: KNN Advisor | Train KNN on torcs_ps4_dataset.csv and integrate as residual advisor with rigid clamp. | M2 | IMPLEMENTED, OFFLINE VERIFIED |
+| 4 | Phase 4: Safety Governor & ADAS | Implement Safety Governor rules and integrate ADAS. Pass E2E test (3 consecutive clean laps). | M3 | COMPLETE: V9R4, 5 CLEAN LAPS |
+| 5 | Phase 5: Statistical Validation | Measure reliability, lap-time variance and sector performance before further tuning. | M4 | V9R4 INITIAL: 5/5 CLEAN, EXTENDED RUN PENDING |

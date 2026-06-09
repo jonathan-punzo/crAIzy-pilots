@@ -1,0 +1,563 @@
+import unittest
+
+import numpy as np
+
+import craizy_auto_v8 as v8
+
+
+def sensors(**overrides):
+    values = {
+        "angle": 0.0,
+        "trackPos": 0.0,
+        "speedX": 80.0,
+        "speedY": 0.0,
+        "rpm": 5000.0,
+        "gear": 3,
+        "wheelSpinVel": [67.0, 67.0, 67.0, 67.0],
+        "track": [100.0] * 19,
+    }
+    values.update(overrides)
+    return values
+
+
+class BasePolicyTests(unittest.TestCase):
+    def test_track_position_sign_centers_the_car(self):
+        policy = v8.BaseSensorPolicy()
+        left = policy.action_intent(sensors(trackPos=0.5))
+        right = policy.action_intent(sensors(trackPos=-0.5))
+        self.assertLess(left["steer"], 0.0)
+        self.assertGreater(right["steer"], 0.0)
+
+    def test_slow_mode_caps_target_speed(self):
+        intent = v8.BaseSensorPolicy(slow=True).action_intent(
+            sensors(track=[200.0] * 19)
+        )
+        self.assertLessEqual(intent["target_speed"], v8.SLOW_SPEED_CAP)
+
+    def test_closed_track_reduces_target_speed(self):
+        policy = v8.BaseSensorPolicy()
+        open_road = policy.action_intent(sensors(track=[200.0] * 19))
+        closed_road = policy.action_intent(sensors(track=[35.0] * 19))
+        self.assertLess(
+            closed_road["target_speed"], open_road["target_speed"]
+        )
+
+    def test_open_sensor_anticipates_tight_curve(self):
+        left_curve = [15.0] * 19
+        left_curve[2] = 80.0
+        right_curve = [15.0] * 19
+        right_curve[16] = 80.0
+        policy = v8.BaseSensorPolicy()
+        self.assertGreater(
+            policy.action_intent(sensors(track=left_curve))["steer"],
+            0.0,
+        )
+        self.assertLess(
+            policy.action_intent(sensors(track=right_curve))["steer"],
+            0.0,
+        )
+
+
+class ValidationTests(unittest.TestCase):
+    def test_validation_metrics_collect_sector_values(self):
+        metrics = v8.ValidationMetrics()
+        metrics.observe(sensors(
+            curLapTime=1.0,
+            distFromStart=100.0,
+            speedX=120.0,
+            trackPos=0.2,
+        ))
+        metrics.observe(sensors(
+            curLapTime=1.1,
+            distFromStart=120.0,
+            speedX=140.0,
+            trackPos=-0.4,
+        ))
+        values = metrics.values()
+        self.assertAlmostEqual(values["S01_time"], 0.1)
+        self.assertAlmostEqual(values["S01_avg_speed"], 130.0)
+        self.assertAlmostEqual(values["S01_max_track_pos"], 0.4)
+
+    def test_validation_summary_uses_only_clean_completed_laps(self):
+        rows = [
+            {
+                "reason": "lap_complete",
+                "lap_time": "90.0",
+                "clean": "1",
+                "S01_avg_speed": "150.0",
+                "S01_max_track_pos": "0.4",
+            },
+            {
+                "reason": "lap_complete",
+                "lap_time": "92.0",
+                "clean": "1",
+                "S01_avg_speed": "140.0",
+                "S01_max_track_pos": "0.5",
+            },
+            {
+                "reason": "server_closed",
+                "lap_time": "0.0",
+                "clean": "0",
+            },
+        ]
+        report = v8.validation_summary(rows)
+        self.assertEqual(report["attempts"], 3)
+        self.assertEqual(report["clean"], 2)
+        self.assertEqual(report["best"], 90.0)
+        self.assertEqual(report["mean"], 91.0)
+        self.assertEqual(report["median"], 91.0)
+        self.assertEqual(report["sectors"][0]["avg_speed"], 145.0)
+        self.assertEqual(report["sectors"][0]["max_track_pos"], 0.5)
+
+    def test_validation_accepts_clean_server_finish(self):
+        row = {
+            "reason": "server_closed",
+            "lap_time": "0.0",
+            "clean": "0",
+            "offtrack_steps": "0",
+            "recovery_steps": "0",
+        }
+        for name, _, _ in v8.VALIDATION_SECTORS:
+            row["%s_time" % name] = "9.0"
+            row["%s_avg_speed" % name] = "150.0"
+            row["%s_max_track_pos" % name] = "0.5"
+        report = v8.validation_summary([row])
+        self.assertEqual(report["completed"], 1)
+        self.assertEqual(report["clean"], 1)
+        self.assertEqual(report["median"], 90.0)
+
+
+class AdvisorAndSafetyTests(unittest.TestCase):
+    class FixedSpeedProfile:
+        def __init__(self, speed):
+            self.speed = speed
+
+        def speed_at(self, _distance):
+            return self.speed
+
+    def test_advisor_respects_authority_bounds(self):
+        features = np.asarray([
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [2.0, 2.0],
+            [3.0, 3.0],
+            [4.0, 4.0],
+            [5.0, 5.0],
+            [6.0, 6.0],
+        ])
+        targets = np.asarray([
+            [1.0, 100.0],
+            [1.0, 100.0],
+            [1.0, 100.0],
+            [1.0, 100.0],
+            [1.0, 100.0],
+            [1.0, 100.0],
+            [1.0, 100.0],
+        ])
+        prediction = v8.ResidualAdvisor(features, targets).predict(
+            features[0]
+        )
+        self.assertLessEqual(
+            abs(prediction["delta_steer"]), v8.MAX_STEER_ADVICE
+        )
+        self.assertLessEqual(
+            abs(prediction["delta_speed"]), v8.MAX_SPEED_ADVICE
+        )
+
+    def test_edge_brake_overrides_positive_advice(self):
+        state = sensors(trackPos=0.96, speedX=180.0)
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = v8.SafetyGovernor().apply(
+            state,
+            base,
+            {"delta_steer": 0.12, "delta_speed": 25.0},
+        )
+        self.assertEqual(governed["accel"], 0.0)
+        self.assertGreater(governed["brake"], 0.0)
+        self.assertIn("edge_brake", governed["interventions"])
+
+    def test_base_braking_has_priority(self):
+        state = sensors(speedX=260.0, track=[35.0] * 19)
+        base = v8.BaseSensorPolicy().action_intent(state)
+        self.assertLess(base["pedal"], 0.0)
+        governed = v8.SafetyGovernor().apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+        self.assertEqual(governed["accel"], 0.0)
+        self.assertGreater(governed["brake"], 0.0)
+
+    def test_projected_edge_adds_inward_steering(self):
+        governor = v8.SafetyGovernor()
+        governor.previous_track_pos = -0.50
+        governor.track_pos_rate = -0.01
+        state = sensors(trackPos=-0.54, speedX=120.0)
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreater(governed["steer"], base["steer"])
+        self.assertIn("projected_edge", governed["interventions"])
+
+    def test_tight_curve_cap_survives_brief_sensor_reopening(self):
+        governor = v8.SafetyGovernor()
+        tight_state = sensors(
+            speedX=120.0,
+            distFromStart=2450.0,
+            track=[22.0] * 19,
+        )
+        tight_base = v8.BaseSensorPolicy().action_intent(tight_state)
+        first = governor.apply(
+            tight_state,
+            tight_base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+        open_state = sensors(
+            speedX=90.0,
+            distFromStart=2470.0,
+            track=[100.0] * 19,
+        )
+        open_base = v8.BaseSensorPolicy().action_intent(open_state)
+        second = governor.apply(
+            open_state,
+            open_base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+        self.assertLess(first["target_speed"], 90.0)
+        self.assertLess(second["target_speed"], 90.0)
+        self.assertIn("tight_curve_hold", second["interventions"])
+
+    def test_normal_curve_uses_faster_cap(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(
+            speedX=120.0,
+            distFromStart=1500.0,
+            track=[22.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreaterEqual(governed["target_speed"], 105.0)
+        self.assertEqual(
+            governed["tight_curve_ticks"],
+            v8.FAST_CURVE_HOLD_TICKS,
+        )
+        self.assertIn(
+            "performance_bonus", governed["interventions"]
+        )
+
+    def test_performance_bonus_skips_protected_sectors(self):
+        base_policy = v8.BaseSensorPolicy()
+        normal = sensors(
+            speedX=120.0,
+            distFromStart=2000.0,
+            track=[80.0] * 19,
+        )
+        protected = sensors(
+            speedX=120.0,
+            distFromStart=2400.0,
+            track=[80.0] * 19,
+        )
+        normal_governed = v8.SafetyGovernor().apply(
+            normal,
+            base_policy.action_intent(normal),
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        protected_governed = v8.SafetyGovernor().apply(
+            protected,
+            base_policy.action_intent(protected),
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreater(
+            normal_governed["target_speed"],
+            protected_governed["target_speed"],
+        )
+        self.assertNotIn(
+            "performance_bonus",
+            protected_governed["interventions"],
+        )
+
+    def test_first_corner_keeps_safe_profile(self):
+        state = sensors(
+            speedX=160.0,
+            distFromStart=420.0,
+            track=[22.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = v8.SafetyGovernor().apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertLessEqual(governed["target_speed"], 90.0)
+        self.assertNotIn(
+            "performance_bonus", governed["interventions"]
+        )
+
+    def test_first_corner_brakes_before_turn_in(self):
+        state = sensors(
+            speedX=205.0,
+            distFromStart=360.0,
+            track=[100.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = v8.SafetyGovernor().apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+        self.assertEqual(governed["target_speed"], 155.0)
+        self.assertGreater(governed["brake"], 0.0)
+        self.assertIn(
+            "first_corner_speed", governed["interventions"]
+        )
+
+    def test_protected_edge_adds_extra_inward_steering(self):
+        governor = v8.SafetyGovernor()
+        governor.previous_track_pos = 0.62
+        governor.track_pos_rate = 0.01
+        state = sensors(
+            speedX=105.0,
+            trackPos=0.70,
+            distFromStart=2400.0,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertLess(governed["steer"], base["steer"])
+        self.assertIn(
+            "protected_edge", governed["interventions"]
+        )
+
+    def test_corkscrew_rescue_activates_only_outside_clean_corridor(self):
+        clean_governor = v8.SafetyGovernor()
+        clean_governor.previous_track_pos = -0.12
+        clean_state = sensors(
+            speedX=225.0,
+            trackPos=-0.12,
+            distFromStart=2275.0,
+        )
+        clean_base = v8.BaseSensorPolicy().action_intent(clean_state)
+        clean = clean_governor.apply(
+            clean_state,
+            clean_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+
+        risk_governor = v8.SafetyGovernor()
+        risk_governor.previous_track_pos = -0.35
+        risk_state = sensors(
+            speedX=225.0,
+            trackPos=-0.40,
+            distFromStart=2275.0,
+        )
+        risk_base = v8.BaseSensorPolicy().action_intent(risk_state)
+        risk = risk_governor.apply(
+            risk_state,
+            risk_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+
+        self.assertNotIn(
+            "corkscrew_rescue", clean["interventions"]
+        )
+        self.assertIn(
+            "corkscrew_rescue", risk["interventions"]
+        )
+        self.assertGreater(risk["steer"], risk_base["steer"])
+        self.assertLessEqual(risk["target_speed"], 225.0)
+
+    def test_expert_speed_floor_boosts_only_safe_sector(self):
+        profile = self.FixedSpeedProfile(260.0)
+        normal_state = sensors(
+            speedX=120.0,
+            distFromStart=1200.0,
+            track=[70.0] * 19,
+        )
+        normal_base = v8.BaseSensorPolicy().action_intent(normal_state)
+        normal = v8.SafetyGovernor(speed_profile=profile).apply(
+            normal_state,
+            normal_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        protected_state = sensors(
+            speedX=120.0,
+            distFromStart=2400.0,
+            track=[70.0] * 19,
+        )
+        protected_base = v8.BaseSensorPolicy().action_intent(
+            protected_state
+        )
+        protected = v8.SafetyGovernor(speed_profile=profile).apply(
+            protected_state,
+            protected_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreaterEqual(
+            normal["target_speed"],
+            260.0 * v8.PERFORMANCE_PROFILE_FACTOR,
+        )
+        self.assertIn(
+            "expert_speed_floor", normal["interventions"]
+        )
+        self.assertNotIn(
+            "expert_speed_floor", protected["interventions"]
+        )
+
+    def test_expert_speed_floor_requires_stable_lateral_speed(self):
+        profile = self.FixedSpeedProfile(260.0)
+        state = sensors(
+            speedX=120.0,
+            speedY=12.0,
+            distFromStart=1200.0,
+            track=[70.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = v8.SafetyGovernor(speed_profile=profile).apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertNotIn(
+            "expert_speed_floor", governed["interventions"]
+        )
+
+    def test_expert_curve_cap_relaxes_only_normal_sector(self):
+        profile = self.FixedSpeedProfile(200.0)
+        normal_state = sensors(
+            speedX=120.0,
+            distFromStart=1200.0,
+            track=[25.0] * 19,
+        )
+        normal_base = v8.BaseSensorPolicy().action_intent(normal_state)
+        normal = v8.SafetyGovernor(speed_profile=profile).apply(
+            normal_state,
+            normal_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        protected_state = sensors(
+            speedX=120.0,
+            distFromStart=2400.0,
+            track=[25.0] * 19,
+        )
+        protected_base = v8.BaseSensorPolicy().action_intent(
+            protected_state
+        )
+        protected = v8.SafetyGovernor(speed_profile=profile).apply(
+            protected_state,
+            protected_base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreaterEqual(
+            normal["target_speed"],
+            200.0 * v8.CURVE_PROFILE_FACTOR,
+        )
+        self.assertIn("expert_curve_cap", normal["interventions"])
+        self.assertNotIn(
+            "expert_curve_cap", protected["interventions"]
+        )
+        self.assertLess(protected["target_speed"], normal["target_speed"])
+
+    def test_last_corner_has_local_speed_cap(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(
+            speedX=210.0,
+            distFromStart=3200.0,
+            track=[100.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+        self.assertEqual(governed["target_speed"], 180.0)
+        self.assertIn(
+            "last_corner_speed", governed["interventions"]
+        )
+
+    def test_last_corner_prepares_outside_line(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(
+            speedX=170.0,
+            trackPos=0.15,
+            distFromStart=3100.0,
+            track=[150.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertLess(governed["steer"], base["steer"])
+        self.assertIn(
+            "last_corner_line", governed["interventions"]
+        )
+
+    def test_last_corner_does_not_affect_other_sectors(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(
+            speedX=170.0,
+            trackPos=0.15,
+            distFromStart=2000.0,
+            track=[150.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertNotIn(
+            "last_corner_line", governed["interventions"]
+        )
+        self.assertNotIn(
+            "last_corner_speed", governed["interventions"]
+        )
+
+    def test_last_corner_line_releases_before_apex(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(
+            speedX=110.0,
+            trackPos=0.10,
+            distFromStart=3250.0,
+            track=[40.0] * 19,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertNotIn(
+            "last_corner_line", governed["interventions"]
+        )
+        self.assertIn(
+            "last_corner_speed", governed["interventions"]
+        )
+
+    def test_lateral_drift_adds_countersteer(self):
+        governor = v8.SafetyGovernor()
+        state = sensors(speedX=100.0, speedY=-10.0)
+        base = v8.BaseSensorPolicy().action_intent(state)
+        governed = governor.apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 0.0},
+        )
+        self.assertGreater(governed["steer"], base["steer"])
+        self.assertIn("lateral_steer", governed["interventions"])
+
+
+if __name__ == "__main__":
+    unittest.main()

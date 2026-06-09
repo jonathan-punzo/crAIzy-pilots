@@ -8,3 +8,4 @@ results/*.csv
 auto_*_runs.csv
 auto_*_trace.csv
 logs/*.csv
+logs/
