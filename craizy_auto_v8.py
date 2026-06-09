@@ -28,7 +28,7 @@ from sklearn.neighbors import KNeighborsRegressor
 import snakeoil3_jm2 as snakeoil3
 
 
-DRIVER_VERSION = "craizy_auto_v8_sensor_base_residual_knn_v9r4"
+DRIVER_VERSION = "craizy_auto_v8_sensor_base_residual_knn_v9r5_s03_entry"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "torcs_ps4_dataset.csv")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -617,6 +617,7 @@ class SharedADAS:
         self.steer_target = 0.0
         self.accel = 0.0
         self.brake = 0.0
+        self.last_diagnostics = {}
 
     def apply(self, sensors, intent, forced_gear=None):
         speed = abs(safe_float(sensors.get("speedX")))
@@ -655,6 +656,15 @@ class SharedADAS:
         traction_slip = max(
             0.0, statistics.mean(wheel_speed[2:]) - vehicle_speed
         )
+        self.last_diagnostics = {
+            "governed_steer": target_steer,
+            "filtered_steer_target": self.steer_target,
+            "actuator_steer": self.steer,
+            "front_wheel_speed": statistics.mean(wheel_speed[:2]),
+            "rear_wheel_speed": statistics.mean(wheel_speed[2:]),
+            "abs_slip": abs_slip,
+            "traction_slip": traction_slip,
+        }
         output_brake = self.brake
         output_accel = self.accel
         if speed >= ABS_MIN_SPEED_KMH and abs_slip > ABS_SLIP_START_MPS:
@@ -759,11 +769,11 @@ class SafetyGovernor:
             self.state_ticks = 0
 
         interventions = []
+        distance = safe_float(sensors.get("distFromStart"), -1.0)
         steer = base["steer"] + advisor["delta_steer"]
         target_speed = base["target_speed"] + advisor["delta_speed"]
         target_speed = clamp(target_speed, 55.0, MAX_OPERATIONAL_SPEED)
 
-        distance = safe_float(sensors.get("distFromStart"), -1.0)
         track_block = track_block_at(distance)
         corkscrew_sector = distance_in_block(
             distance, "S07_CORKSCREW", include_end=True
@@ -817,6 +827,20 @@ class SafetyGovernor:
                 target_speed, first_corner_speed_cap(distance)
             )
             interventions.append("first_corner_speed")
+
+        if (
+            660.0 <= distance <= 710.0
+            and signed_track_pos < 0.20
+            and speed > 172.0
+        ):
+            line_correction = clamp(
+                0.30 * (0.38 - signed_track_pos),
+                0.0,
+                0.16,
+            )
+            steer += line_correction
+            target_speed = min(target_speed, 176.0)
+            interventions.append("s03_entry_guard")
 
         if self.corkscrew_rescue:
             rescue_correction = clamp(
@@ -986,6 +1010,7 @@ class SafetyGovernor:
             "forced_gear": forced_gear,
             "state": self.state,
             "projected_track_pos": projected_track_pos,
+            "track_pos_rate": self.track_pos_rate,
             "tight_curve_cap": self.tight_curve_cap,
             "tight_curve_ticks": self.tight_curve_ticks,
             "profile_speed": profile_speed,
@@ -1026,6 +1051,7 @@ class RuntimePolicy:
             **base,
             **advice,
             **governed,
+            **self.adas.last_diagnostics,
             "base_steer": base["steer"],
             "base_target_speed": base["target_speed"],
         }
@@ -1037,13 +1063,17 @@ class TraceLogger:
         "step", "curLapTime", "distFromStart", "speedX", "speedY",
         "trackPos", "angle", "damage", "track_block",
         "track_block_role", "front", "near", "openness",
-        "aim_hint", "curve_urgency", "projected_track_pos",
+        "aim_hint", "curve_urgency", "track_pos_rate",
+        "projected_track_pos",
         "tight_curve_cap", "tight_curve_ticks",
         "profile_speed",
         "base_steer", "base_target_speed", "raw_delta_steer",
         "raw_delta_speed", "delta_steer", "delta_speed", "confidence",
-        "neighbor_distance", "target_speed", "final_steer", "final_accel",
-        "final_brake", "final_gear", "state", "interventions", "inference_ms",
+        "neighbor_distance", "target_speed", "governed_steer",
+        "filtered_steer_target", "actuator_steer", "front_wheel_speed",
+        "rear_wheel_speed", "abs_slip", "traction_slip",
+        "final_steer", "final_accel", "final_brake", "final_gear",
+        "state", "interventions", "inference_ms",
     )
 
     def __init__(self):
@@ -1071,6 +1101,7 @@ class TraceLogger:
             "openness": data["openness"],
             "aim_hint": data["aim_hint"],
             "curve_urgency": data["curve_urgency"],
+            "track_pos_rate": data["track_pos_rate"],
             "projected_track_pos": data["projected_track_pos"],
             "tight_curve_cap": data["tight_curve_cap"],
             "tight_curve_ticks": data["tight_curve_ticks"],
@@ -1084,6 +1115,13 @@ class TraceLogger:
             "confidence": data["confidence"],
             "neighbor_distance": data["neighbor_distance"],
             "target_speed": data["target_speed"],
+            "governed_steer": data["governed_steer"],
+            "filtered_steer_target": data["filtered_steer_target"],
+            "actuator_steer": data["actuator_steer"],
+            "front_wheel_speed": data["front_wheel_speed"],
+            "rear_wheel_speed": data["rear_wheel_speed"],
+            "abs_slip": data["abs_slip"],
+            "traction_slip": data["traction_slip"],
             "final_steer": action["steer"],
             "final_accel": action["accel"],
             "final_brake": action["brake"],

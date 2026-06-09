@@ -207,6 +207,24 @@ class AdvisorAndSafetyTests(unittest.TestCase):
         self.assertEqual(diagnostics["track_block"], "S04")
         self.assertEqual(diagnostics["track_block_role"], "fast")
 
+    def test_runtime_diagnostics_include_vehicle_dynamics(self):
+        action, diagnostics = v8.RuntimePolicy().action(
+            sensors(
+                distFromStart=1800.0,
+                trackPos=-0.4,
+                wheelSpinVel=[60.0, 61.0, 62.0, 63.0],
+            )
+        )
+        self.assertIn("track_pos_rate", diagnostics)
+        self.assertIn("filtered_steer_target", diagnostics)
+        self.assertIn("front_wheel_speed", diagnostics)
+        self.assertIn("rear_wheel_speed", diagnostics)
+        self.assertIn("abs_slip", diagnostics)
+        self.assertIn("traction_slip", diagnostics)
+        self.assertEqual(
+            diagnostics["actuator_steer"], action["steer"]
+        )
+
     def test_edge_brake_overrides_positive_advice(self):
         state = sensors(trackPos=0.96, speedX=180.0)
         base = v8.BaseSensorPolicy().action_intent(state)
@@ -418,6 +436,73 @@ class AdvisorAndSafetyTests(unittest.TestCase):
         )
         self.assertGreater(risk["steer"], risk_base["steer"])
         self.assertLessEqual(risk["target_speed"], 225.0)
+
+    def test_s03_entry_guard_corrects_only_risky_approach(self):
+        state = sensors(
+            speedX=182.0,
+            speedY=0.2,
+            angle=0.02,
+            trackPos=0.05,
+            distFromStart=685.0,
+        )
+        base = v8.BaseSensorPolicy().action_intent(state)
+        result = v8.SafetyGovernor().apply(
+            state,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+
+        self.assertIn(
+            "s03_entry_guard",
+            result["interventions"],
+        )
+        self.assertGreater(result["steer"], base["steer"])
+        self.assertLessEqual(result["target_speed"], 176.0)
+
+    def test_s03_entry_guard_preserves_safe_approaches(self):
+        advisor = {"delta_steer": 0.02, "delta_speed": 0.0}
+        outside_distance = sensors(
+            speedX=182.0,
+            trackPos=0.05,
+            distFromStart=640.0,
+        )
+        safe_line = sensors(
+            speedX=182.0,
+            trackPos=0.38,
+            distFromStart=685.0,
+        )
+        safe_speed = sensors(
+            speedX=168.0,
+            trackPos=0.05,
+            distFromStart=685.0,
+        )
+        distance_base = v8.BaseSensorPolicy().action_intent(
+            outside_distance
+        )
+        line_base = v8.BaseSensorPolicy().action_intent(safe_line)
+        speed_base = v8.BaseSensorPolicy().action_intent(safe_speed)
+        distance_result = v8.SafetyGovernor().apply(
+            outside_distance, distance_base, advisor
+        )
+        line_result = v8.SafetyGovernor().apply(
+            safe_line, line_base, advisor
+        )
+        speed_result = v8.SafetyGovernor().apply(
+            safe_speed, speed_base, advisor
+        )
+
+        self.assertNotIn(
+            "s03_entry_guard",
+            distance_result["interventions"],
+        )
+        self.assertNotIn(
+            "s03_entry_guard",
+            line_result["interventions"],
+        )
+        self.assertNotIn(
+            "s03_entry_guard",
+            speed_result["interventions"],
+        )
 
     def test_expert_speed_floor_boosts_only_safe_sector(self):
         profile = self.FixedSpeedProfile(260.0)

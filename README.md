@@ -37,6 +37,16 @@ Il circuito e' suddiviso in dieci blocchi `TRACK_BLOCKS`; ogni riga dei
 nuovi trace include `track_block` e `track_block_role`. Questa struttura
 e' condivisa da telemetria e validazione e consente future policy locali
 senza duplicare intervalli di distanza nel codice.
+I trace V9r4 includono inoltre diagnostica behavior-neutral per
+`track_pos_rate`, sterzo richiesto e filtrato, velocita' ruote, slip ABS
+e traction slip. Questi campi servono a isolare le biforcazioni S05
+senza introdurre nuove correzioni nel controller.
+
+La variante sperimentale `v9r5_s03_entry` usa tale diagnostica per
+proteggere l'ingresso tecnico di S03. Tra 660 e 710 metri interviene
+solo quando l'auto e' ancora sulla linea interna e supera 172 km/h:
+prepara la linea esterna con una correzione limitata e applica un cap
+locale di 176 km/h. I passaggi gia' corretti non vengono modificati.
 
 La V8 v9r4 usa il 96% della velocita' mediana dei giri esperti come
 riferimento minimo nei settori ordinari. Prima curva, Corkscrew e ultima
