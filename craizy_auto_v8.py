@@ -149,13 +149,15 @@ TCS_SLIP_START_MPS = 3.0
 TCS_SLIP_FULL_MPS = 10.0
 TCS_MAX_CUT = 0.40
 
-SHIFT_COOLDOWN = 0.35
+SHIFT_COOLDOWN = 0.60
 UPSHIFT_RPM = 7600.0
-DOWNSHIFT_RPM = 3300.0
-PANIC_DOWNSHIFT_RPM = 2300.0
+PANIC_DOWNSHIFT_RPM = 2000.0
+LOW_RPM_DOWNSHIFT = 3000.0
 UPSHIFT_SPEED = {1: 45.0, 2: 78.0, 3: 112.0, 4: 148.0, 5: 184.0}
+RPM_UPSHIFT_MIN_SPEED = {
+    1: 38.0, 2: 66.0, 3: 98.0, 4: 130.0, 5: 163.0,
+}
 DOWNSHIFT_SPEED = {2: 30.0, 3: 58.0, 4: 90.0, 5: 122.0, 6: 155.0}
-MIN_SPEED_FOR_UPSHIFT = {1: 22.0, 2: 48.0, 3: 78.0, 4: 110.0, 5: 145.0}
 
 NORMAL = "NORMAL"
 STABILIZE = "STABILIZE"
@@ -573,41 +575,73 @@ class ResidualAdvisor:
 
 class AutomaticGearbox:
     def __init__(self):
-        self.gear = 1
-        self.last_shift_time = 0.0
+        self.reset()
 
-    def update(self, sensors):
-        now = time.monotonic()
+    def reset(self):
+        self.gear = 1
+        self.pending_gear = None
+        self.last_shift_time = float("-inf")
+
+    @staticmethod
+    def _sensor_gear(sensors):
+        gear = int(safe_float(sensors.get("gear"), 0.0))
+        return gear if 1 <= gear <= 6 else None
+
+    def update(self, sensors, accel=0.0, brake=0.0, now=None):
+        now = time.monotonic() if now is None else float(now)
         speed = abs(safe_float(sensors.get("speedX")))
         rpm = safe_float(sensors.get("rpm"))
-        current_sensor = int(safe_float(sensors.get("gear"), self.gear))
-        if 1 <= current_sensor <= 6:
-            self.gear = current_sensor
+        accel = clamp(safe_float(accel), 0.0, 1.0)
+        brake = clamp(safe_float(brake), 0.0, 1.0)
+        sensor_gear = self._sensor_gear(sensors)
+
+        if self.pending_gear is not None:
+            if sensor_gear == self.pending_gear:
+                self.gear = sensor_gear
+                self.pending_gear = None
+            elif now - self.last_shift_time < SHIFT_COOLDOWN:
+                return self.pending_gear
+            else:
+                self.pending_gear = None
+
+        if sensor_gear is not None:
+            self.gear = sensor_gear
+
         current = int(clamp(self.gear, 1, 6))
         if now - self.last_shift_time < SHIFT_COOLDOWN:
             return current
+
         new_gear = current
-        if current > 1 and (
-            speed < DOWNSHIFT_SPEED.get(current, 0.0)
-            or 0.0 < rpm < PANIC_DOWNSHIFT_RPM
-            or (
-                0.0 < rpm < DOWNSHIFT_RPM
-                and speed < DOWNSHIFT_SPEED.get(current, 0.0) + 12.0
+        if current > 1:
+            downshift_speed = DOWNSHIFT_SPEED[current]
+            braking_or_coasting = brake > 0.05 or accel < 0.35
+            ordinary_downshift = (
+                speed < downshift_speed and braking_or_coasting
             )
-        ):
-            new_gear -= 1
-        elif current < 6 and (
-            (
+            panic_downshift = 0.0 < rpm < PANIC_DOWNSHIFT_RPM
+            low_rpm_downshift = (
+                0.0 < rpm < LOW_RPM_DOWNSHIFT
+                and speed < downshift_speed - 5.0
+                and (brake > 0.05 or accel < 0.60)
+            )
+            if ordinary_downshift or panic_downshift or low_rpm_downshift:
+                new_gear = current - 1
+
+        if new_gear == current and current < 6:
+            rpm_upshift = (
                 rpm >= UPSHIFT_RPM
-                and speed >= MIN_SPEED_FOR_UPSHIFT.get(current, 999.0)
+                and speed >= RPM_UPSHIFT_MIN_SPEED[current]
             )
-            or speed >= UPSHIFT_SPEED.get(current, 999.0)
-        ):
-            new_gear += 1
+            forced_speed_upshift = speed >= UPSHIFT_SPEED[current]
+            if rpm_upshift or forced_speed_upshift:
+                new_gear = current + 1
+
         if new_gear != current:
+            self.gear = new_gear
+            self.pending_gear = new_gear
             self.last_shift_time = now
-        self.gear = int(clamp(new_gear, 1, 6))
-        return self.gear
+
+        return int(self.gear)
 
 
 class SharedADAS:
@@ -692,7 +726,11 @@ class SharedADAS:
             "gear": (
                 forced_gear
                 if forced_gear is not None
-                else self.gearbox.update(sensors)
+                else self.gearbox.update(
+                    sensors,
+                    accel=output_accel,
+                    brake=output_brake,
+                )
             ),
             "clutch": 0.0,
             "meta": 0,

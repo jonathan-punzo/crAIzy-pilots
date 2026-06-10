@@ -1,3 +1,7 @@
+import ast
+import csv
+from collections import OrderedDict
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -56,6 +60,153 @@ class BasePolicyTests(unittest.TestCase):
             policy.action_intent(sensors(track=right_curve))["steer"],
             0.0,
         )
+
+
+class AutomaticGearboxTests(unittest.TestCase):
+    @staticmethod
+    def state(speed, rpm, gear=None):
+        values = {"speedX": speed, "rpm": rpm}
+        if gear is not None:
+            values["gear"] = gear
+        return values
+
+    def test_rpm_upshifts_use_hysteresis_thresholds(self):
+        transitions = (
+            (3, 4, 98.0, 85.0),
+            (4, 5, 130.0, 120.0),
+            (5, 6, 163.0, 153.0),
+        )
+        for current, target, upshift_speed, post_shift_speed in transitions:
+            with self.subTest(current=current):
+                gearbox = v8.AutomaticGearbox()
+                gearbox.gear = current
+                shifted = gearbox.update(
+                    self.state(upshift_speed, v8.UPSHIFT_RPM, current),
+                    accel=1.0,
+                    now=0.0,
+                )
+                self.assertEqual(shifted, target)
+                self.assertEqual(
+                    gearbox.update(
+                        self.state(post_shift_speed, 6000.0, target),
+                        accel=1.0,
+                        now=v8.SHIFT_COOLDOWN + 0.01,
+                    ),
+                    target,
+                )
+
+    def test_pending_shift_ignores_stale_sensor_during_cooldown(self):
+        gearbox = v8.AutomaticGearbox()
+        gearbox.gear = 3
+        self.assertEqual(
+            gearbox.update(
+                self.state(98.0, v8.UPSHIFT_RPM, 3),
+                accel=1.0,
+                now=0.0,
+            ),
+            4,
+        )
+        self.assertEqual(
+            gearbox.update(
+                self.state(90.0, 6500.0, 3),
+                accel=1.0,
+                now=v8.SHIFT_COOLDOWN / 2.0,
+            ),
+            4,
+        )
+
+    def test_strong_acceleration_blocks_ordinary_downshift(self):
+        gearbox = v8.AutomaticGearbox()
+        gearbox.gear = 4
+        self.assertEqual(
+            gearbox.update(
+                self.state(85.0, 5000.0, 4),
+                accel=1.0,
+                now=0.0,
+            ),
+            4,
+        )
+
+    def test_braking_and_panic_rpm_still_allow_downshift(self):
+        braking = v8.AutomaticGearbox()
+        braking.gear = 4
+        self.assertEqual(
+            braking.update(
+                self.state(85.0, 5000.0, 4),
+                accel=0.8,
+                brake=0.2,
+                now=0.0,
+            ),
+            3,
+        )
+
+        panic = v8.AutomaticGearbox()
+        panic.gear = 4
+        self.assertEqual(
+            panic.update(
+                self.state(100.0, 1900.0, 4),
+                accel=1.0,
+                now=0.0,
+            ),
+            3,
+        )
+
+    def test_manual_and_v8_gearboxes_remain_identical(self):
+        root = Path(__file__).resolve().parent
+
+        def gearbox_ast(path):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            gearbox = next(
+                node for node in tree.body
+                if isinstance(node, ast.ClassDef)
+                and node.name == "AutomaticGearbox"
+            )
+            return ast.dump(gearbox, include_attributes=False)
+
+        self.assertEqual(
+            gearbox_ast(root / "craizy_manual.py"),
+            gearbox_ast(root / "craizy_auto_v8.py"),
+        )
+
+    def test_dataset_replay_has_no_shift_oscillation(self):
+        path = Path(__file__).resolve().parent / "torcs_ps4_dataset.csv"
+        runs = OrderedDict()
+        with path.open(newline="", encoding="utf-8") as source:
+            for row in csv.DictReader(source):
+                runs.setdefault(row["run_id"], []).append(row)
+
+        self.assertGreaterEqual(len(runs), 4)
+        for run_id, rows in runs.items():
+            gearbox = v8.AutomaticGearbox()
+            shifts = []
+            for row in rows:
+                previous = gearbox.gear
+                current = gearbox.update(
+                    {
+                        "speedX": row["speedX"],
+                        "rpm": row["rpm"],
+                    },
+                    accel=float(row["accel_action"]),
+                    brake=float(row["brake_action"]),
+                    now=float(row["curLapTime"]),
+                )
+                if current != previous:
+                    shifts.append((
+                        float(row["curLapTime"]),
+                        previous,
+                        current,
+                    ))
+
+            reversals = sum(
+                current[1] == previous[2]
+                and current[2] == previous[1]
+                and current[0] - previous[0] < 2.0
+                for previous, current in zip(shifts, shifts[1:])
+            )
+            with self.subTest(run_id=run_id):
+                self.assertGreaterEqual(len(shifts), 23)
+                self.assertLessEqual(len(shifts), 30)
+                self.assertLessEqual(reversals, 3)
 
 
 class ValidationTests(unittest.TestCase):
