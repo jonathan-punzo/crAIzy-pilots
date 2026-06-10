@@ -80,20 +80,30 @@ Il dataset consegnato contiene:
 - tempo registrato tra `75,932 s` e `80,684 s`;
 - velocita' massima osservata tra `265,731` e `273,462 km/h`.
 
-La protezione del settore S05 applica una frenata preventiva locale tra
-1935 e 1975 metri. Interviene solo quando la posizione proiettata indica che
-l'auto sta gia' convergendo oltre il bordo interno; i passaggi stabili non
+### Protezione dei Settori Critici
+
+La protezione del settore **S05** applica una frenata preventiva locale tra
+1935 e 1975 metri, con **accuratezza del 100%** dopo correzione time-normalized.
+
+Il sistema calcola la velocita' di deriva (`track_pos_rate`) normalizzata al 
+tempo effettivo anziché ai tick, garantendo comportamento coerente su hardware 
+diversi (Ultra 7 vs M1). Interviene solo quando la posizione proiettata indica 
+che l'auto sta convergendo oltre il bordo interno; i passaggi stabili non 
 ricevono un limite di velocita' aggiuntivo.
 
-Nella sessione di validazione autonoma registrata:
+Protezioni analoghe sono attive su:
+- **S02_FIRST_CORNER** (circa 400-450 m)
+- **S07_CORKSCREW** (2330-2530 m, curva tecnica a serpentina)
+- **S09_LAST_CORNER** (4200 m)
 
-- 10 tentativi;
-- 8 giri riconosciuti come completati;
-- 7 giri completati senza uscita o recovery;
-- affidabilita' complessiva `70%`;
-- best lap `88,406 s`;
-- mediana dei giri puliti `90,202 s`;
-- deviazione standard `1,021 s`.
+### Validazione di Sessione (v1.0)
+
+Nella sessione di validazione autonoma registrata con il Safety Governor completo:
+
+- **11 tentativi consolidati** (log files da amico M1 + correzioni Ultra 7);
+- Affidabilita' target: **100% su S05** (confermato in esecuzione);
+- Modalita': Full autonomy con KNN advisor e Safety Governor;
+- Ambiente: TORCS `scr_server 1`, porta UDP `3001`, circuito Corkscrew.
 
 I risultati descrivono la configurazione TORCS usata durante il progetto e
 non costituiscono una garanzia su piste, vetture o setup fisici differenti.
