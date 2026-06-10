@@ -6,7 +6,6 @@ venv/
 *.mp4
 
 results/*.csv
-auto_*_runs.csv
-auto_*_trace.csv
 logs/*.csv
-logs/
+logs/craizy_auto_runs/
+logs/backup*/
