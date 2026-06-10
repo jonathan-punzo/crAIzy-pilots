@@ -655,6 +655,49 @@ class AdvisorAndSafetyTests(unittest.TestCase):
             speed_result["interventions"],
         )
 
+    def test_s05_projection_brakes_only_diverging_line(self):
+        governor = v8.SafetyGovernor()
+        governor.previous_track_pos = -0.35
+        governor.track_pos_rate = -0.04
+        risky = sensors(
+            speedX=165.0,
+            trackPos=-0.42,
+            distFromStart=1950.0,
+        )
+        base = v8.BaseSensorPolicy().action_intent(risky)
+        result = governor.apply(
+            risky,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+
+        self.assertIn(
+            "s05_projection_brake",
+            result["interventions"],
+        )
+        self.assertLessEqual(result["target_speed"], 155.0)
+
+    def test_s05_projection_preserves_stable_line(self):
+        governor = v8.SafetyGovernor()
+        governor.previous_track_pos = -0.18
+        governor.track_pos_rate = -0.02
+        stable = sensors(
+            speedX=165.0,
+            trackPos=-0.24,
+            distFromStart=1950.0,
+        )
+        base = v8.BaseSensorPolicy().action_intent(stable)
+        result = governor.apply(
+            stable,
+            base,
+            {"delta_steer": 0.0, "delta_speed": 25.0},
+        )
+
+        self.assertNotIn(
+            "s05_projection_brake",
+            result["interventions"],
+        )
+
     def test_expert_speed_floor_boosts_only_safe_sector(self):
         profile = self.FixedSpeedProfile(260.0)
         normal_state = sensors(

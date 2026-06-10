@@ -75,6 +75,12 @@ Il dataset consegnato contiene:
 - tempo registrato tra `75,932 s` e `80,684 s`;
 - velocita' massima osservata tra `265,731` e `273,462 km/h`.
 
+La variante `v9r7_s05_projection` mantiene il dataset da dieci giri e
+aggiunge una frenata preventiva locale tra 1935 e 1975 metri. Interviene
+solo quando la posizione proiettata indica che l'auto sta gia'
+convergendo oltre il bordo interno di S05; i passaggi stabili non
+ricevono un limite di velocita' aggiuntivo.
+
 Nella sessione di validazione autonoma registrata:
 
 - 10 tentativi;

@@ -28,7 +28,7 @@ from sklearn.neighbors import KNeighborsRegressor
 import snakeoil3_jm2 as snakeoil3
 
 
-DRIVER_VERSION = "craizy_auto_v8_sensor_base_residual_knn_v9r5_s03_entry"
+DRIVER_VERSION = "craizy_auto_v8_sensor_base_residual_knn_v9r7_s05_projection"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "torcs_ps4_dataset.csv")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -879,6 +879,22 @@ class SafetyGovernor:
             steer += line_correction
             target_speed = min(target_speed, 176.0)
             interventions.append("s03_entry_guard")
+
+        if (
+            1935.0 <= distance <= 1975.0
+            and projected_track_pos < -1.0
+            and self.track_pos_rate < -0.025
+        ):
+            projection_risk = clamp(
+                (-projected_track_pos - 1.0) / 0.35,
+                0.0,
+                1.0,
+            )
+            target_speed = min(
+                target_speed,
+                155.0 - 15.0 * projection_risk,
+            )
+            interventions.append("s05_projection_brake")
 
         if self.corkscrew_rescue:
             rescue_correction = clamp(
