@@ -96,11 +96,11 @@ Protezioni analoghe sono attive su:
 - **S07_CORKSCREW** (2330-2530 m, curva tecnica a serpentina)
 - **S09_LAST_CORNER** (4200 m)
 
-### Validazione di Sessione (v1.0)
+### Validazione di Sessione
 
 Nella sessione di validazione autonoma registrata con il Safety Governor completo:
 
-- **11 tentativi consolidati** (log files da amico M1 + correzioni Ultra 7);
+- **11 tentativi consolidati** (log files da AppleSilicon M1 + Intel Ultra 7);
 - Affidabilita' target: **100% su S05** (confermato in esecuzione);
 - Modalita': Full autonomy con KNN advisor e Safety Governor;
 - Ambiente: TORCS `scr_server 1`, porta UDP `3001`, circuito Corkscrew.
